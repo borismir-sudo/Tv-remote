@@ -435,8 +435,54 @@ public class TvClient {
         }
     }
 
-    /** An exact move that is never merged with finger moves (used to park / calibrate the cursor). */
-    public void moveExact(int dx, int dy) { ptr.execute(() -> sendChunked(dx, dy)); }
+    static final int PACED_STEP = 8;       // small, equal steps …
+    static final int PACED_PAUSE_MS = 4;   // … at an even pace, so the TV adds no acceleration
+
+    private static void sleepQuiet(long ms) {
+        try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+    }
+
+    private static String moveMsg(int dx, int dy) { return "type:move\ndx:" + dx + "\ndy:" + dy + "\ndown:0\n\n"; }
+
+    /** Push the pointer into the top-left corner: it stops at the edge, so its position is then known exactly. */
+    private void parkNow() {
+        pointerNow(moveMsg(-1, -1));          // wakes a hidden pointer
+        sleepQuiet(60);
+        for (int k = 0; k < 220; k++) pointerNow(moveMsg(-60, -60));
+        sleepQuiet(80);
+    }
+
+    /**
+     * Glide along one axis with identical steps at an even pace. Mixing step sizes (diagonals) lets the TV's
+     * own acceleration distort the path; one axis at a time keeps the distance exactly proportional.
+     */
+    private void axisPacedNow(int d, boolean horizontal) {
+        int sign = d >= 0 ? 1 : -1, left = Math.abs(d);
+        while (left > 0) {
+            int st = Math.min(PACED_STEP, left);
+            pointerNow(horizontal ? moveMsg(sign * st, 0) : moveMsg(0, sign * st));
+            left -= st;
+            sleepQuiet(PACED_PAUSE_MS);
+        }
+    }
+
+    private void movePacedNow(int dx, int dy) {
+        axisPacedNow(dx, true);
+        axisPacedNow(dy, false);
+    }
+
+    /** Absolute pointing: park in the corner, then glide (ux, uy) units from it; optionally click there. */
+    public void pointTo(int ux, int uy, boolean click) {
+        ptr.execute(() -> {
+            synchronized (moveLock) { moveDx = 0; moveDy = 0; }
+            parkNow();
+            movePacedNow(Math.max(0, ux), Math.max(0, uy));
+            if (click) {
+                sleepQuiet(120);
+                pointerNow("type:click\n\n");
+            }
+        });
+    }
     private final Object moveLock = new Object();
     private int moveDx, moveDy;
     private boolean moveQueued;

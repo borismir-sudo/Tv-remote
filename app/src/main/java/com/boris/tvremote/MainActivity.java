@@ -72,6 +72,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
     private View padDot;
     private TextView flashView;
     private TvPreview preview;
+    private TextView previewTip;
     private View playRow, headerRow, navRow, segRowView, rockerRow, appsRow, focusBar;
     private TextView eyeSeg, eyeFocus;
     private boolean shotInFlight;
@@ -390,6 +391,12 @@ public class MainActivity extends Activity implements TvClient.Listener {
         preview = new TvPreview(this);
         preview.setMessage(L.s("Экран телевизора появится здесь", "The TV screen will appear here"));
         box.addView(preview, new LinearLayout.LayoutParams(-1, 0, 1f));
+        attachPreviewGestures();
+        TextView tip = text(L.s("Картинка: касание — курсор туда · двойное — клик · 🎯 калибровка",
+                "Picture: tap — cursor there · double tap — click · 🎯 calibrate"), 11, C_DIM, false);
+        tip.setGravity(Gravity.CENTER);
+        box.addView(tip, margins(new LinearLayout.LayoutParams(-1, -2), 0, 4, 0, 0));
+        previewTip = tip;
 
         FrameLayout f = new FrameLayout(this);
         GradientDrawable bg = round(C_PAD, 24);
@@ -424,6 +431,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
 
     private void applyPreviewSetting() {
         if (preview != null) preview.setVisibility(previewOn() ? View.VISIBLE : View.GONE);
+        if (previewTip != null) previewTip.setVisibility(previewOn() ? View.VISIBLE : View.GONE);
         applyLayout();
     }
 
@@ -456,41 +464,102 @@ public class MainActivity extends Activity implements TvClient.Listener {
     }
 
     /** Park the TV pointer in the top-left corner (it stops at the edge), then bring it to the centre, so the drawn cursor matches. */
-    private static final int CAL_X = 800, CAL_Y = 450;   // units sent after parking in the corner
+    // Mapping from "units sent after parking" to TV-picture pixels: px = o + k * units (per axis).
+    private float kx() { return prefs.getFloat("p2kx", 1f); }
+    private float ky() { return prefs.getFloat("p2ky", 1f); }
+    private float ox() { return prefs.getFloat("p2ox", 0f); }
+    private float oy() { return prefs.getFloat("p2oy", 0f); }
+    private int unitsX(float px) { return Math.round((px - ox()) / kx()); }
+    private int unitsY(float py) { return Math.round((py - oy()) / ky()); }
 
-    /** Park the TV pointer in the top-left corner (it stops at the edge), then move a known distance. */
-    private void syncCursor() {
-        tv.moveExact(-4000, -4000);          // sent as many small steps; ends exactly in the corner
-        tv.moveExact(CAL_X, CAL_Y);
-        curX = Math.min(TvPreview.TV_W, CAL_X * prefs.getFloat("kx", 1f));
-        curY = Math.min(TvPreview.TV_H, CAL_Y * prefs.getFloat("ky", 1f));
+    /** Put the TV pointer exactly at a point of the picture (and click if asked). */
+    private void pointAt(float px, float py, boolean click) {
+        tv.pointTo(unitsX(px), unitsY(py), click);
+        curX = px;
+        curY = py;
         if (preview != null) preview.setCursor(curX, curY, true);
     }
 
-    private boolean calibrating;
+    /** Re-anchor: park and bring the pointer to the centre of the screen. */
+    private void syncCursor() {
+        pointAt(TvPreview.TV_W / 2, TvPreview.TV_H / 2, false);
+    }
 
-    /** One-tap calibration: park + move a known distance, then the user taps where the TV cursor really is. */
+    // Two-point calibration: the pointer is sent a known distance from the corner twice,
+    // the user taps where it really is each time → scale and offset per axis.
+    private static final int[][] CAL_UNITS = {{400, 225}, {1200, 675}};
+    private int calStep = -1;
+    private final float[][] calTaps = new float[2][];
+
     private void startCalibration() {
         if (preview == null) return;
-        calibrating = true;
-        tv.moveExact(-4000, -4000);
-        tv.moveExact(CAL_X, CAL_Y);
+        calStep = 0;
+        tv.pointTo(CAL_UNITS[0][0], CAL_UNITS[0][1], false);
         preview.setCursor(0, 0, false);
-        flash(L.s("Коснитесь на картинке, где сейчас курсор на ТВ", "Tap on the picture where the TV cursor is now"));
-        toast(L.s("Коснитесь на картинке, где сейчас курсор на ТВ", "Tap on the picture where the TV cursor is now"));
+        String m = L.s("Калибровка 1 из 2: коснитесь картинки там, где курсор на ТВ", "Calibration 1 of 2: tap the picture where the TV cursor is");
+        flash(m);
+        toast(m);
+    }
+
+    private void calibrationTap(float[] t) {
+        calTaps[calStep] = t;
+        if (calStep == 0) {
+            calStep = 1;
+            tv.pointTo(CAL_UNITS[1][0], CAL_UNITS[1][1], false);
+            String m = L.s("Калибровка 2 из 2: снова коснитесь, где курсор на ТВ", "Calibration 2 of 2: tap again where the TV cursor is");
+            flash(m);
+            toast(m);
+            return;
+        }
+        calStep = -1;
+        float du = CAL_UNITS[1][0] - CAL_UNITS[0][0], dv = CAL_UNITS[1][1] - CAL_UNITS[0][1];
+        float kx = (calTaps[1][0] - calTaps[0][0]) / du, ky = (calTaps[1][1] - calTaps[0][1]) / dv;
+        if (kx < 0.1f || ky < 0.1f || kx > 10f || ky > 10f) {
+            toast(L.s("Калибровка не удалась — точки слишком близко. Попробуйте ещё раз 🎯", "Calibration failed — points too close. Try 🎯 again"));
+            return;
+        }
+        float ox = calTaps[0][0] - kx * CAL_UNITS[0][0], oy = calTaps[0][1] - ky * CAL_UNITS[0][1];
+        prefs.edit().putFloat("p2kx", kx).putFloat("p2ky", ky).putFloat("p2ox", ox).putFloat("p2oy", oy).apply();
+        log(String.format(java.util.Locale.US, "калибровка: kx=%.3f ky=%.3f ox=%.0f oy=%.0f", kx, ky, ox, oy));
+        curX = calTaps[1][0];
+        curY = calTaps[1][1];
+        preview.setCursor(curX, curY, true);
+        flash(L.s("Готово ✓ Теперь касайтесь картинки — курсор пойдёт туда", "Done ✓ Now tap the picture — the cursor goes there"));
+    }
+
+    /** Taps on the TV picture: calibration, or point (single tap) / point + click (double tap). */
+    private void attachPreviewGestures() {
+        final android.view.GestureDetector gd = new android.view.GestureDetector(this, new android.view.GestureDetector.SimpleOnGestureListener() {
+            @Override public boolean onDown(MotionEvent e) { return true; }
+            @Override public boolean onSingleTapUp(MotionEvent e) {
+                if (calStep >= 0) {
+                    float[] t = preview.toTv(e.getX(), e.getY());
+                    if (t != null) { haptic(preview); calibrationTap(t); }
+                }
+                return true;
+            }
+            @Override public boolean onSingleTapConfirmed(MotionEvent e) {
+                if (calStep >= 0) return true;
+                float[] t = preview.toTv(e.getX(), e.getY());
+                if (t == null) return true;
+                haptic(preview);
+                pointAt(t[0], t[1], false);
+                flash(L.s("Курсор сюда", "Cursor here"));
+                return true;
+            }
+            @Override public boolean onDoubleTap(MotionEvent e) {
+                if (calStep >= 0) return true;
+                float[] t = preview.toTv(e.getX(), e.getY());
+                if (t == null) return true;
+                haptic(preview);
+                pointAt(t[0], t[1], true);
+                flash(L.s("Клик сюда", "Click here"));
+                return true;
+            }
+        });
         preview.setOnTouchListener((v, e) -> {
-            if (!calibrating || e.getActionMasked() != MotionEvent.ACTION_UP) return calibrating;
-            float[] t = preview.toTv(e.getX(), e.getY());
-            if (t == null) return true;
-            float kx = Math.max(0.2f, Math.min(5f, t[0] / CAL_X));
-            float ky = Math.max(0.2f, Math.min(5f, t[1] / CAL_Y));
-            prefs.edit().putFloat("kx", kx).putFloat("ky", ky).apply();
-            calibrating = false;
-            curX = t[0];
-            curY = t[1];
-            preview.setCursor(curX, curY, true);
-            log(String.format(java.util.Locale.US, "калибровка: kx=%.2f ky=%.2f", kx, ky));
-            flash(L.s("Готово — курсор выровнен", "Done — cursor aligned"));
+            v.getParent().requestDisallowInterceptTouchEvent(true);
+            gd.onTouchEvent(e);
             return true;
         });
     }
@@ -507,8 +576,8 @@ public class MainActivity extends Activity implements TvClient.Listener {
                 if (ix != 0 || iy != 0) {
                     tv.move(ix, iy);
                     accX -= ix; accY -= iy;
-                    curX = Math.max(0, Math.min(TvPreview.TV_W, curX + ix * prefs.getFloat("kx", 1f)));
-                    curY = Math.max(0, Math.min(TvPreview.TV_H, curY + iy * prefs.getFloat("ky", 1f)));
+                    curX = Math.max(0, Math.min(TvPreview.TV_W, curX + ix * kx()));
+                    curY = Math.max(0, Math.min(TvPreview.TV_H, curY + iy * ky()));
                     if (preview != null) preview.setCursor(curX, curY, true);
                 }
                 if (is != 0) { tv.scroll(0, is); accScroll -= is; }
