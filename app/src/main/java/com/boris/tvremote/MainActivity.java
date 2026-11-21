@@ -379,6 +379,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         LinearLayout apps = row();
         apps.addView(appKey("YouTube", true, v -> tv.launch("youtube.leanback.v4")), weightLp(0));
         apps.addView(appKey("Netflix", true, v -> tv.launch("netflix")), weightLp(8));
+        apps.addView(appKey(L.s("🌐 Сайт", "🌐 Web"), false, v -> showBrowser()), weightLp(8));
         apps.addView(appKey("HDMI", false, v -> showInputs()), weightLp(8));
         apps.addView(appKey("123", false, v -> showKeypad()), weightLp(8));
         root.addView(apps, margins(new LinearLayout.LayoutParams(-1, dp(46)), 0, 10, 0, 0));
@@ -1095,6 +1096,48 @@ public class MainActivity extends Activity implements TvClient.Listener {
         String[] names = {"HDMI 1", "HDMI 2", "HDMI 3", L.s("Эфирное ТВ", "Live TV")};
         String[] ids = {"com.webos.app.hdmi1", "com.webos.app.hdmi2", "com.webos.app.hdmi3", "com.webos.app.livetv"};
         new AlertDialog.Builder(this).setTitle(L.s("Источник", "Input")).setItems(names, (d, w) -> tv.launch(ids[w])).show();
+    }
+
+    /** Open the TV's own browser, at an address or a Google search typed on the phone. */
+    private void showBrowser() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), 0);
+        final EditText field = new EditText(this);
+        field.setHint(L.s("адрес сайта или что искать", "web address or search"));
+        field.setSingleLine(true);
+        field.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        field.setText(prefs.getString("lastUrl", ""));
+        box.addView(field);
+        TextView quick = new TextView(this);
+        quick.setText(L.s("Пусто → просто открыть браузер. Вход в Google — через google.com в самом браузере.",
+                "Empty → just open the browser. Sign in to Google at google.com inside the browser."));
+        quick.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        box.addView(quick);
+        new AlertDialog.Builder(this)
+                .setTitle(L.s("Браузер на телевизоре", "Browser on the TV"))
+                .setView(box)
+                .setPositiveButton(L.s("Открыть", "Open"), (d, w) -> {
+                    String t = field.getText().toString().trim();
+                    prefs.edit().putString("lastUrl", t).apply();
+                    tv.openBrowser(toUrl(t));
+                    flash("🌐 " + (t.isEmpty() ? L.s("Браузер", "Browser") : t));
+                })
+                .setNeutralButton("YouTube.com", (d, w) -> tv.openBrowser("https://www.youtube.com"))
+                .setNegativeButton(L.s("Отмена", "Cancel"), null)
+                .show();
+        field.requestFocus();
+    }
+
+    private static String toUrl(String t) {
+        if (t == null || t.isEmpty()) return "";
+        if (t.matches("(?i)^https?://.*")) return t;
+        if (!t.contains(" ") && t.matches(".*\\.[a-zA-Z]{2,}(/.*)?$")) return "https://" + t;
+        try {
+            return "https://www.google.com/search?q=" + java.net.URLEncoder.encode(t, "UTF-8");
+        } catch (Exception e) {
+            return "https://www.google.com";
+        }
     }
 
     private void showKeypad() {

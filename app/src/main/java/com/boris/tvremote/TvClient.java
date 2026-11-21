@@ -117,6 +117,12 @@ public class TvClient {
     public void powerOff() { ssap("system/turnOff"); }
     public void launch(String appId) { ssap("system.launcher/launch", Json.map("id", appId)); }
 
+    /** Open the TV's built-in web browser, optionally at an address. */
+    public void openBrowser(String url) {
+        if (url == null || url.isEmpty()) launch("com.webos.app.browser");
+        else ssap("system.launcher/open", Json.map("target", url));
+    }
+
     /** Open YouTube on the TV with a search query. */
     public void youtubeSearch(String query) {
         String q;
