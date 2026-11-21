@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -29,3 +32,10 @@ jobs:
         with:
           name: BorisTvRemote-apk
           path: BorisTvRemote.apk
+      - name: Publish as "latest" release (direct phone download link)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest BorisTvRemote.apk --title "Пульт ТВ (последняя версия)" --notes "Сборка ${{ github.sha }}" --latest
