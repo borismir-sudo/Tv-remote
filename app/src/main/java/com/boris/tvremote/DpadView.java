@@ -54,7 +54,7 @@ public class DpadView extends View {
         label.setColor(0xFFFFFFFF);
         label.setTextAlign(Paint.Align.CENTER);
         label.setTypeface(Typeface.DEFAULT_BOLD);
-        setContentDescription("Джойстик: стрелки и OK");
+        setContentDescription(L.s("Джойстик: стрелки и OK", "D-pad: arrows and OK"));
     }
 
     public void setOnKey(OnKey l) { listener = l; }

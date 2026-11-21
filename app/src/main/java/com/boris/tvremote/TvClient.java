@@ -95,9 +95,9 @@ public class TvClient {
         exec.execute(() -> {
             try {
                 sendInput("type:button\nname:" + button + "\n\n");
-                listener.onLog("кнопка " + button);
+                listener.onLog(L.s("кнопка ", "key ") + button);
             } catch (Exception e) {
-                listener.onLog("кнопка " + button + " не прошла: " + e.getMessage());
+                listener.onLog(L.s("кнопка ", "key ") + button + L.s(" не прошла: ", " failed: ") + e.getMessage());
                 if (fallbackUri == null) { fail(e); return; }
                 try { request(fallbackUri, null); } catch (Exception e2) { fail(e2); }
             }
@@ -127,7 +127,7 @@ public class TvClient {
                 request("com.webos.service.ime/insertText", Json.map("text", text, "replace", Boolean.FALSE));
                 if (enter) request("com.webos.service.ime/sendEnterKey", null);
             } catch (Exception e) {
-                listener.onLog("ввод текста не прошёл (" + e.getMessage() + ") → ищу в YouTube");
+                listener.onLog(L.s("ввод текста не прошёл (", "text input failed (") + e.getMessage() + L.s(") → ищу в YouTube", ") → searching YouTube"));
                 youtubeSearch(text);
             }
         });
@@ -142,15 +142,15 @@ public class TvClient {
     private void ensureMain() throws Exception {
         WsConn m = main;
         if (m != null && m.isOpen()) return;
-        if (ip == null || ip.isEmpty()) throw new IOException("Не задан IP телевизора (⚙)");
-        listener.onStatus("Подключаюсь к " + ip + "…", false);
+        if (ip == null || ip.isEmpty()) throw new IOException(L.s("Не задан IP телевизора (⚙)", "TV IP not set (⚙)"));
+        listener.onStatus(L.s("Подключаюсь к ", "Connecting to ") + ip + "…", false);
         dropConnections();
         regQueue.clear();
 
         WsConn c = openMain();
         main = c;
         register(c);
-        listener.onStatus("Подключено: " + ip, true);
+        listener.onStatus(L.s("Подключено: ", "Connected: ") + ip, true);
         // Learn the MAC for Wake-on-LAN (best effort).
         try {
             Map<String, Object> info = request("com.webos.service.connectionmanager/getinfo", null);
@@ -187,7 +187,7 @@ public class TvClient {
             if (c == main) {
                 main = null;
                 closeInput();
-                listener.onStatus("Нет связи с телевизором", false);
+                listener.onStatus(L.s("Нет связи с телевизором", "Lost connection to TV"), false);
             }
         }
     };
@@ -196,23 +196,23 @@ public class TvClient {
         boolean signed = true;
         c.sendText(Json.stringify(registrationMsg(signed)));
         Map<String, Object> r = regQueue.poll(RESPONSE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-        if (r == null) throw new IOException("Телевизор не ответил на регистрацию");
+        if (r == null) throw new IOException(L.s("Телевизор не ответил на регистрацию", "TV did not answer registration"));
         if ("error".equals(r.get("type"))) {
             // Newer firmware rejects the signed manifest: retry unsigned.
             signed = false;
             c.sendText(Json.stringify(registrationMsg(signed)));
             r = regQueue.poll(RESPONSE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-            if (r == null) throw new IOException("Телевизор не ответил на регистрацию");
+            if (r == null) throw new IOException(L.s("Телевизор не ответил на регистрацию", "TV did not answer registration"));
         }
         Map<String, Object> p = Json.obj(r.get("payload"));
         if ("response".equals(r.get("type")) && p != null && "PROMPT".equals(p.get("pairingType"))) {
-            listener.onStatus("Нажмите «Принять» на экране телевизора (пультом)", false);
+            listener.onStatus(L.s("Нажмите «Принять» на экране телевизора (пультом)", "Press “Accept” on the TV screen (with the remote)"), false);
             r = regQueue.poll(PAIR_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-            if (r == null) throw new IOException("Не подтвердили на телевизоре за 60 секунд");
+            if (r == null) throw new IOException(L.s("Не подтвердили на телевизоре за 60 секунд", "Not accepted on the TV within 60 seconds"));
             p = Json.obj(r.get("payload"));
         }
-        if ("error".equals(r.get("type"))) throw new IOException("Телевизор отказал: " + r.get("error"));
-        if (!"registered".equals(r.get("type"))) throw new IOException("Неожиданный ответ: " + r.get("type"));
+        if ("error".equals(r.get("type"))) throw new IOException(L.s("Телевизор отказал: ", "TV refused: ") + r.get("error"));
+        if (!"registered".equals(r.get("type"))) throw new IOException(L.s("Неожиданный ответ: ", "Unexpected reply: ") + r.get("type"));
         String key = p == null ? null : Json.str(p.get("client-key"));
         if (key != null && !key.isEmpty() && !key.equals(clientKey)) {
             clientKey = key;
@@ -221,6 +221,10 @@ public class TvClient {
     }
 
     private Map<String, Object> request(String uri, Map<String, Object> payload) throws Exception {
+        return request(uri, payload, false);
+    }
+
+    private Map<String, Object> request(String uri, Map<String, Object> payload, boolean quiet) throws Exception {
         ensureMain();
         String id = "req_" + seq.getAndIncrement();
         BlockingQueue<Map<String, Object>> q = new ArrayBlockingQueue<>(2);
@@ -230,12 +234,12 @@ public class TvClient {
             if (payload != null) msg.put("payload", payload);
             main.sendText(Json.stringify(msg));
             Map<String, Object> r = q.poll(RESPONSE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-            if (r == null) { listener.onLog(uri + " → нет ответа"); throw new IOException("Телевизор не ответил"); }
-            listener.onLog(uri + " → " + abbreviate(Json.stringify(r.get("type")) + " " + Json.stringify(r.containsKey("error") ? r.get("error") : r.get("payload"))));
+            if (r == null) { if (!quiet) listener.onLog(uri + L.s(" → нет ответа", " → no reply")); throw new IOException(L.s("Телевизор не ответил", "TV did not answer")); }
+            if (!quiet) listener.onLog(uri + " → " + abbreviate(Json.stringify(r.get("type")) + " " + Json.stringify(r.containsKey("error") ? r.get("error") : r.get("payload"))));
             if ("error".equals(r.get("type"))) throw new IOException(String.valueOf(r.get("error")));
             Map<String, Object> p = Json.obj(r.get("payload"));
             if (p != null && Boolean.FALSE.equals(p.get("returnValue"))) {
-                throw new IOException(String.valueOf(p.containsKey("errorText") ? p.get("errorText") : "ошибка команды"));
+                throw new IOException(String.valueOf(p.containsKey("errorText") ? p.get("errorText") : L.s("ошибка команды", "command error")));
             }
             return p;
         } finally {
@@ -248,7 +252,7 @@ public class TvClient {
         if (in == null || !in.isOpen()) {
             Map<String, Object> r = request("com.webos.service.networkinput/getPointerInputSocket", null);
             String path = r == null ? null : Json.str(r.get("socketPath"));
-            if (path == null) throw new IOException("Нет сокета кнопок");
+            if (path == null) throw new IOException(L.s("Нет сокета кнопок", "No key socket"));
             in = openInput(path);
             input = in;
         }
@@ -261,7 +265,7 @@ public class TvClient {
 
     /** Open the pointer/key socket ahead of time so the touchpad reacts instantly. */
     public void prepareInput() {
-        exec.execute(() -> { try { ensureInput(); } catch (Exception e) { listener.onLog("сокет мыши: " + e.getMessage()); } });
+        exec.execute(() -> { try { ensureInput(); } catch (Exception e) { listener.onLog(L.s("сокет мыши: ", "mouse socket: ") + e.getMessage()); } });
     }
 
     private volatile long lastPointerError;
@@ -278,9 +282,71 @@ public class TvClient {
         });
     }
 
+    public interface InfoCallback { void onInfo(String appId, Integer volume, Boolean muted); }
+    public interface ShotCallback { void onShot(byte[] jpeg); }
+
+    /** What is on the TV now (foreground app, volume). Only while connected; never triggers a reconnect. */
+    public void requestInfo(InfoCallback cb) {
+        exec.execute(() -> {
+            if (!isConnected()) return;
+            String app = null; Integer vol = null; Boolean mute = null;
+            try {
+                Map<String, Object> a = request("com.webos.applicationManager/getForegroundAppInfo", null, true);
+                if (a != null) app = Json.str(a.get("appId"));
+            } catch (Exception ignored) { }
+            try {
+                Map<String, Object> v = request("audio/getVolume", null, true);
+                Map<String, Object> st = v == null ? null : Json.obj(v.get("volumeStatus"));
+                Map<String, Object> src = st != null ? st : v;
+                if (src != null) {
+                    Object n = src.get("volume");
+                    if (n instanceof Number) vol = ((Number) n).intValue();
+                    Object m = src.containsKey("muteStatus") ? src.get("muteStatus") : src.get("muted");
+                    if (m instanceof Boolean) mute = (Boolean) m;
+                }
+            } catch (Exception ignored) { }
+            cb.onInfo(app, vol, mute);
+        });
+    }
+
+    private volatile boolean shotUnsupported;
+    private int shotFailures;
+
+    /** Grab a still of the TV picture (works for live TV / menus; DRM apps usually give black or refuse). */
+    public void requestScreenshot(ShotCallback cb) {
+        exec.execute(() -> {
+            if (!isConnected() || shotUnsupported) { cb.onShot(null); return; }
+            try {
+                Map<String, Object> r = request("tv/executeOneShot",
+                        Json.map("path", "/tmp/boris_remote.jpg", "method", "DISPLAY", "format", "JPG"), true);
+                String uri = r == null ? null : Json.str(r.get("imageUri"));
+                if (uri == null) { cb.onShot(null); return; }
+                java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(uri).openConnection();
+                c.setConnectTimeout(2500);
+                c.setReadTimeout(2500);
+                try (java.io.InputStream in = c.getInputStream()) {
+                    java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                    byte[] buf = new byte[16384];
+                    int n;
+                    while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+                    shotFailures = 0;
+                    cb.onShot(bo.toByteArray());
+                } finally {
+                    c.disconnect();
+                }
+            } catch (Exception e) {
+                if (++shotFailures >= 3) {
+                    shotUnsupported = true;
+                    listener.onLog(L.s("снимок экрана ТВ недоступен: ", "TV screenshot unavailable: ") + e.getMessage());
+                }
+                cb.onShot(null);
+            }
+        });
+    }
+
     /** Move the TV's on-screen pointer (Magic Remote style). */
     public void move(int dx, int dy) { pointer("type:move\ndx:" + dx + "\ndy:" + dy + "\ndown:0\n\n"); }
-    public void click() { pointer("type:click\n\n"); listener.onLog("клик мышью"); }
+    public void click() { pointer("type:click\n\n"); listener.onLog(L.s("клик мышью", "mouse click")); }
     public void scroll(int dx, int dy) { pointer("type:scroll\ndx:" + dx + "\ndy:" + dy + "\n\n"); }
 
     private WsConn openInput(String path) throws IOException {

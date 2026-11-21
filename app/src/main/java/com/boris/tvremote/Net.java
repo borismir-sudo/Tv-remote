@@ -17,7 +17,7 @@ public final class Net {
 
     public static byte[] parseMac(String mac) {
         String hex = mac == null ? "" : mac.replaceAll("[^0-9A-Fa-f]", "");
-        if (hex.length() != 12) throw new IllegalArgumentException("Неверный MAC-адрес: " + mac);
+        if (hex.length() != 12) throw new IllegalArgumentException(L.s("Неверный MAC-адрес: ", "Invalid MAC address: ") + mac);
         byte[] b = new byte[6];
         for (int k = 0; k < 6; k++) b[k] = (byte) Integer.parseInt(hex.substring(k * 2, k * 2 + 2), 16);
         return b;

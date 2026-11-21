@@ -70,6 +70,11 @@ public class MainActivity extends Activity implements TvClient.Listener {
     private TextView segButtons, segMouse, langRu, langEn;
     private View dpad, pad;
     private View padDot;
+    private TextView flashView;
+    private ImageView shotView;
+    private View padHints;
+    private boolean resumed;
+    private String infoText = "";
     private SpeechRecognizer recognizer;
     private boolean voiceToYoutube;
     private boolean connected;
@@ -81,6 +86,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         getWindow().setStatusBarColor(C_BG);
         getWindow().setNavigationBarColor(C_BG);
         prefs = getSharedPreferences("tv", MODE_PRIVATE);
+        L.en = "en".equals(prefs.getString("ui", "ru"));
         tv = new TvClient(this);
         setContentView(buildUi());
         setMode(prefs.getString("mode", "buttons"));
@@ -95,6 +101,84 @@ public class MainActivity extends Activity implements TvClient.Listener {
             tv.connect();
             if ("mouse".equals(prefs.getString("mode", ""))) tv.prepareInput();
         }
+        resumed = true;
+        ui.removeCallbacks(infoPoll);
+        ui.removeCallbacks(shotPoll);
+        ui.postDelayed(infoPoll, 1500);
+        ui.postDelayed(shotPoll, 1800);
+    }
+
+    @Override
+    protected void onPause() {
+        resumed = false;
+        ui.removeCallbacks(infoPoll);
+        ui.removeCallbacks(shotPoll);
+        super.onPause();
+    }
+
+    // ---------------- live feedback from the TV ----------------
+
+    private final Runnable infoPoll = new Runnable() {
+        @Override public void run() {
+            if (!resumed) return;
+            if (connected) tv.requestInfo((app, vol, mute) -> ui.post(() -> showInfo(app, vol, mute)));
+            ui.postDelayed(this, 2500);
+        }
+    };
+
+    private final Runnable shotPoll = new Runnable() {
+        @Override public void run() {
+            if (!resumed) return;
+            if (connected && pad != null && pad.getVisibility() == View.VISIBLE) {
+                tv.requestScreenshot(jpeg -> ui.post(() -> showShot(jpeg)));
+            }
+            ui.postDelayed(this, 1500);
+        }
+    };
+
+    private void showShot(byte[] jpeg) {
+        if (jpeg == null || shotView == null) return;
+        android.graphics.Bitmap b = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
+        if (b == null) return;
+        shotView.setImageBitmap(b);
+        shotView.setVisibility(View.VISIBLE);
+        if (padHints != null) padHints.setVisibility(View.GONE);
+    }
+
+    private static String appName(String id) {
+        if (id == null || id.isEmpty()) return null;
+        if (id.startsWith("youtube")) return "YouTube";
+        if (id.equals("netflix")) return "Netflix";
+        if (id.equals("amazon")) return "Prime Video";
+        if (id.startsWith("com.webos.app.hdmi")) return "HDMI " + id.substring("com.webos.app.hdmi".length());
+        if (id.equals("com.webos.app.livetv")) return L.s("Эфирное ТВ", "Live TV");
+        if (id.contains("home") || id.contains("launcher")) return L.s("Главный экран", "Home screen");
+        if (id.contains("miracast") || id.contains("screenshare")) return L.s("Трансляция экрана", "Screen share");
+        if (id.contains("browser")) return L.s("Браузер", "Browser");
+        if (id.contains("settings")) return L.s("Настройки ТВ", "TV settings");
+        String[] parts = id.split("\\.");
+        String last = parts[parts.length - 1];
+        return last.isEmpty() ? id : Character.toUpperCase(last.charAt(0)) + last.substring(1);
+    }
+
+    private void showInfo(String app, Integer vol, Boolean mute) {
+        StringBuilder b = new StringBuilder();
+        String name = appName(app);
+        if (name != null) b.append(" · ").append(name);
+        if (Boolean.TRUE.equals(mute)) b.append(" · 🔇");
+        else if (vol != null) b.append(" · 🔊 ").append(vol);
+        infoText = b.toString();
+        if (connected) statusLine.setText(L.s("Подключено", "Connected") + infoText);
+    }
+
+    /** Short on-screen confirmation of what was just sent to the TV. */
+    private void flash(String what) {
+        if (flashView == null || what == null) return;
+        flashView.setText(what);
+        flashView.animate().cancel();
+        flashView.setAlpha(1f);
+        flashView.setVisibility(View.VISIBLE);
+        flashView.animate().alpha(0f).setStartDelay(900).setDuration(400).start();
     }
 
     @Override
@@ -122,35 +206,35 @@ public class MainActivity extends Activity implements TvClient.Listener {
         header.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout names = new LinearLayout(this);
         names.setOrientation(LinearLayout.VERTICAL);
-        statusLine = text("Нет связи", 12, C_DIM, false);
-        tvName = text(ip().isEmpty() ? "Телевизор не настроен" : "LG · " + ip(), 16, C_TEXT, true);
+        statusLine = text(L.s("Нет связи", "Not connected"), 12, C_DIM, false);
+        tvName = text(ip().isEmpty() ? L.s("Телевизор не настроен", "TV not set up") : "LG · " + ip(), 16, C_TEXT, true);
         tvName.setSingleLine(true);
         names.addView(statusLine);
         names.addView(tvName);
         header.addView(names, new LinearLayout.LayoutParams(0, -2, 1f));
-        header.addView(key(R.drawable.ic_list, null, 0, C_DIM, -1, 22, "Журнал",
+        header.addView(key(R.drawable.ic_list, null, 0, C_DIM, -1, 22, L.s("Журнал", "Log"),
                 v -> logView.setVisibility(logView.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE)), size(44, 44));
-        header.addView(key(R.drawable.ic_cog, null, 0, C_DIM, -1, 22, "Настройки пульта", v -> showSettings()), size(44, 44));
-        View power = key(R.drawable.ic_power, null, C_POWER, Color.WHITE, -1, 24, "Питание", v -> powerToggle());
+        header.addView(key(R.drawable.ic_cog, null, 0, C_DIM, -1, 22, L.s("Настройки пульта", "Remote settings"), v -> showSettings()), size(44, 44));
+        View power = key(R.drawable.ic_power, null, C_POWER, Color.WHITE, -1, 24, L.s("Питание", "Power"), v -> powerToggle());
         power.setOnLongClickListener(v -> { haptic(v); powerOn(); return true; });
         header.addView(power, margins(size(52, 52), 8, 0, 0, 0));
         root.addView(header, new LinearLayout.LayoutParams(-1, dp(56)));
 
         // --- back · home · mute · menu · keyboard
         LinearLayout nav = row();
-        nav.addView(key(R.drawable.ic_back, null, C_KEY, C_TEXT, 26, 22, "Назад", v -> tv.button("BACK")), weightLp(0));
-        nav.addView(key(R.drawable.ic_home, null, C_KEY, C_TEXT, 26, 22, "Домой", v -> tv.button("HOME")), weightLp(8));
-        nav.addView(key(R.drawable.ic_mute, null, C_KEY, C_TEXT, 26, 22, "Без звука", v -> tv.toggleMute()), weightLp(8));
-        nav.addView(key(R.drawable.ic_menu, null, C_KEY, C_TEXT, 26, 22, "Меню телевизора", v -> tv.button("MENU")), weightLp(8));
-        nav.addView(key(R.drawable.ic_kbd, null, C_KEY, C_TEXT, 26, 22, "Клавиатура", v -> showKeyboard()), weightLp(8));
+        nav.addView(key(R.drawable.ic_back, null, C_KEY, C_TEXT, 26, 22, L.s("Назад", "Back"), v -> tv.button("BACK")), weightLp(0));
+        nav.addView(key(R.drawable.ic_home, null, C_KEY, C_TEXT, 26, 22, L.s("Домой", "Home"), v -> tv.button("HOME")), weightLp(8));
+        nav.addView(key(R.drawable.ic_mute, null, C_KEY, C_TEXT, 26, 22, L.s("Без звука", "Mute"), v -> tv.toggleMute()), weightLp(8));
+        nav.addView(key(R.drawable.ic_menu, null, C_KEY, C_TEXT, 26, 22, L.s("Меню телевизора", "TV menu"), v -> tv.button("MENU")), weightLp(8));
+        nav.addView(key(R.drawable.ic_kbd, null, C_KEY, C_TEXT, 26, 22, L.s("Клавиатура", "Keyboard"), v -> showKeyboard()), weightLp(8));
         root.addView(nav, margins(new LinearLayout.LayoutParams(-1, dp(52)), 0, 10, 0, 0));
 
         // --- segmented: Кнопки | Мышь
         LinearLayout seg = row();
         seg.setPadding(dp(4), dp(4), dp(4), dp(4));
         seg.setBackground(round(C_KEY, 22));
-        segButtons = segItem("Кнопки", v -> setMode("buttons"));
-        segMouse = segItem("Мышь", v -> setMode("mouse"));
+        segButtons = segItem(L.s("Кнопки", "Buttons"), v -> setMode("buttons"));
+        segMouse = segItem(L.s("Мышь", "Mouse"), v -> setMode("mouse"));
         seg.addView(segButtons, size(112, 36));
         seg.addView(segMouse, margins(size(112, 36), 4, 0, 0, 0));
         LinearLayout segRow = row();
@@ -161,12 +245,21 @@ public class MainActivity extends Activity implements TvClient.Listener {
         // --- center (fills the free space): d-pad or touchpad; the log overlays it
         FrameLayout center = new FrameLayout(this);
         DpadView dv = new DpadView(this, C_KEY, C_OK, C_TEXT);
-        dv.setOnKey(name -> tv.button(name));
+        dv.setOnKey(name -> {
+            tv.button(name);
+            switch (name) {
+                case "UP": flash("▲ " + L.s("Вверх", "Up")); break;
+                case "DOWN": flash("▼ " + L.s("Вниз", "Down")); break;
+                case "LEFT": flash("◀ " + L.s("Влево", "Left")); break;
+                case "RIGHT": flash("▶ " + L.s("Вправо", "Right")); break;
+                default: flash("OK");
+            }
+        });
         dpad = dv;
         pad = buildPad();
         center.addView(dpad, new FrameLayout.LayoutParams(-1, -1));
         center.addView(pad, new FrameLayout.LayoutParams(-1, -1));
-        logView = text("Журнал пуст", 11, 0xFF9FD3A8, false);
+        logView = text(L.s("Журнал пуст", "Log is empty"), 11, 0xFF9FD3A8, false);
         logView.setTypeface(Typeface.MONOSPACE);
         logView.setBackground(round(0xF00A0C0F, 16));
         logView.setPadding(dp(10), dp(8), dp(10), dp(8));
@@ -174,17 +267,24 @@ public class MainActivity extends Activity implements TvClient.Listener {
         logView.setMovementMethod(new android.text.method.ScrollingMovementMethod());
         logView.setVisibility(View.GONE);
         center.addView(logView, new FrameLayout.LayoutParams(-1, -1));
+        flashView = text("", 15, C_TEXT, true);
+        flashView.setBackground(round(0xE6000000, 18));
+        flashView.setPadding(dp(16), dp(8), dp(16), dp(8));
+        flashView.setAlpha(0f);
+        FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        flp.topMargin = dp(6);
+        center.addView(flashView, flp);
         root.addView(center, margins(new LinearLayout.LayoutParams(-1, 0, 1f), 0, 14, 0, 14));
 
         // --- VOL rocker · mic + language · CH rocker
         LinearLayout rockers = row();
         rockers.setGravity(Gravity.CENTER_VERTICAL);
-        rockers.addView(rocker("VOL", R.drawable.ic_plus, R.drawable.ic_minus, "Громче", "Тише",
+        rockers.addView(rocker("VOL", R.drawable.ic_plus, R.drawable.ic_minus, L.s("Громче", "Volume up"), L.s("Тише", "Volume down"),
                 () -> tv.volumeUp(), () -> tv.volumeDown(), true), new LinearLayout.LayoutParams(dp(72), -2));
         LinearLayout mid = new LinearLayout(this);
         mid.setOrientation(LinearLayout.VERTICAL);
         mid.setGravity(Gravity.CENTER_HORIZONTAL);
-        View mic = key(R.drawable.ic_mic, null, C_TEXT, C_BG, -1, 34, "Голосовой поиск", v -> voice(false));
+        View mic = key(R.drawable.ic_mic, null, C_TEXT, C_BG, -1, 34, L.s("Голосовой поиск", "Voice search"), v -> voice(false));
         mic.setOnLongClickListener(v -> { haptic(v); voice(true); return true; });
         mid.addView(mic, size(84, 84));
         LinearLayout langSeg = row();
@@ -196,16 +296,16 @@ public class MainActivity extends Activity implements TvClient.Listener {
         langSeg.addView(langEn, margins(size(52, 32), 3, 0, 0, 0));
         mid.addView(langSeg, margins(new LinearLayout.LayoutParams(-2, -2), 0, 12, 0, 0));
         rockers.addView(mid, new LinearLayout.LayoutParams(0, -2, 1f));
-        rockers.addView(rocker("CH", R.drawable.ic_up, R.drawable.ic_down, "Канал вверх", "Канал вниз",
+        rockers.addView(rocker("CH", R.drawable.ic_up, R.drawable.ic_down, L.s("Канал вверх", "Channel up"), L.s("Канал вниз", "Channel down"),
                 () -> tv.channelUp(), () -> tv.channelDown(), false), new LinearLayout.LayoutParams(dp(72), -2));
         root.addView(rockers, new LinearLayout.LayoutParams(-1, -2));
         setLang(lang());
 
         // --- playback
         LinearLayout play = row();
-        play.addView(key(R.drawable.ic_rew, null, C_KEY, C_TEXT, 14, 22, "Перемотка назад", v -> tv.button("REWIND")), weightLp(0));
-        play.addView(key(R.drawable.ic_playpause, null, C_KEY, C_TEXT, 14, 22, "Пауза / воспроизведение", v -> playPause()), weightLp(8));
-        play.addView(key(R.drawable.ic_ff, null, C_KEY, C_TEXT, 14, 22, "Перемотка вперёд", v -> tv.button("FASTFORWARD")), weightLp(8));
+        play.addView(key(R.drawable.ic_rew, null, C_KEY, C_TEXT, 14, 22, L.s("Перемотка назад", "Rewind"), v -> tv.button("REWIND")), weightLp(0));
+        play.addView(key(R.drawable.ic_playpause, null, C_KEY, C_TEXT, 14, 22, L.s("Пауза / воспроизведение", "Play / pause"), v -> playPause()), weightLp(8));
+        play.addView(key(R.drawable.ic_ff, null, C_KEY, C_TEXT, 14, 22, L.s("Перемотка вперёд", "Fast forward"), v -> tv.button("FASTFORWARD")), weightLp(8));
         root.addView(play, margins(new LinearLayout.LayoutParams(-1, dp(46)), 0, 14, 0, 0));
 
         // --- apps
@@ -226,6 +326,15 @@ public class MainActivity extends Activity implements TvClient.Listener {
         bg.setStroke(dp(1), C_PAD_EDGE);
         f.setBackground(bg);
 
+        shotView = new ImageView(this);
+        shotView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        shotView.setAlpha(0.9f);
+        shotView.setVisibility(View.GONE);
+        shotView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(-1, -1);
+        slp.setMargins(dp(6), dp(6), dp(6), dp(6));
+        f.addView(shotView, slp);
+
         padDot = new View(this);
         padDot.setBackground(oval(C_OK));
         padDot.setAlpha(0f);
@@ -238,13 +347,14 @@ public class MainActivity extends Activity implements TvClient.Listener {
         cur.setImageResource(R.drawable.ic_cursor);
         cur.setColorFilter(0xFF3A414C, PorterDuff.Mode.SRC_IN);
         hints.addView(cur, size(40, 40));
-        TextView h1 = text("Водите пальцем — курсор на ТВ", 15, 0xFFC9CED6, true);
-        TextView h2 = text("касание — клик · двумя пальцами — прокрутка", 12, C_DIM, false);
+        TextView h1 = text(L.s("Водите пальцем — курсор на ТВ", "Move your finger — cursor on TV"), 15, 0xFFC9CED6, true);
+        TextView h2 = text(L.s("касание — клик · двумя пальцами — прокрутка", "tap — click · two fingers — scroll"), 12, C_DIM, false);
         h1.setGravity(Gravity.CENTER);
         h2.setGravity(Gravity.CENTER);
         hints.addView(h1, margins(new LinearLayout.LayoutParams(-2, -2), 0, 10, 0, 0));
         hints.addView(h2, margins(new LinearLayout.LayoutParams(-2, -2), 0, 4, 0, 0));
         f.addView(hints, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        padHints = hints;
 
         f.setOnTouchListener(new PadTouch());
         return f;
@@ -313,6 +423,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
                     if (e.getActionMasked() == MotionEvent.ACTION_UP && !twoFinger && travel < 8 && dur < 300) {
                         haptic(v);
                         tv.click();
+                        flash(L.s("Клик", "Click"));
                     }
                     return true;
                 default:
@@ -393,7 +504,9 @@ public class MainActivity extends Activity implements TvClient.Listener {
         f.setContentDescription(desc != null ? desc : label);
         f.setClickable(true);
         f.setFocusable(true);
-        f.setOnClickListener(v -> { haptic(v); l.onClick(v); });
+        final String fl = desc != null ? desc : label;
+        final boolean doFlash = bg != 0;
+        f.setOnClickListener(v -> { haptic(v); if (doFlash) flash(fl); l.onClick(v); });
         return f;
     }
 
@@ -504,9 +617,9 @@ public class MainActivity extends Activity implements TvClient.Listener {
     }
 
     private void showInputs() {
-        String[] names = {"HDMI 1", "HDMI 2", "HDMI 3", "Эфирное ТВ"};
+        String[] names = {"HDMI 1", "HDMI 2", "HDMI 3", L.s("Эфирное ТВ", "Live TV")};
         String[] ids = {"com.webos.app.hdmi1", "com.webos.app.hdmi2", "com.webos.app.hdmi3", "com.webos.app.livetv"};
-        new AlertDialog.Builder(this).setTitle("Источник").setItems(names, (d, w) -> tv.launch(ids[w])).show();
+        new AlertDialog.Builder(this).setTitle(L.s("Источник", "Input")).setItems(names, (d, w) -> tv.launch(ids[w])).show();
     }
 
     private void showKeypad() {
@@ -522,7 +635,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
             }
             box.addView(line, margins(new LinearLayout.LayoutParams(-1, -2), 0, 4, 0, 4));
         }
-        new AlertDialog.Builder(this).setTitle("Номер канала").setView(box).setPositiveButton("Закрыть", null).show();
+        new AlertDialog.Builder(this).setTitle(L.s("Номер канала", "Channel number")).setView(box).setPositiveButton(L.s("Закрыть", "Close"), null).show();
     }
 
     private void showKeyboard() {
@@ -530,11 +643,11 @@ public class MainActivity extends Activity implements TvClient.Listener {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(16), dp(8), dp(16), 0);
         TextView info = new TextView(this);
-        info.setText("Откройте поиск на телевизоре, затем пишите здесь.");
+        info.setText(L.s("Откройте поиск на телевизоре, затем пишите здесь.", "Open search on the TV, then type here."));
         info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         box.addView(info);
         final EditText field = new EditText(this);
-        field.setHint("Текст…");
+        field.setHint(L.s("Текст…", "Text…"));
         field.setSingleLine(true);
         field.setInputType(InputType.TYPE_CLASS_TEXT);
         field.setImeOptions(EditorInfo.IME_ACTION_SEND);
@@ -544,11 +657,11 @@ public class MainActivity extends Activity implements TvClient.Listener {
         del.setText("⌫");
         del.setOnClickListener(v -> tv.deleteChars(1));
         Button yt = new Button(this);
-        yt.setText("В YouTube");
+        yt.setText(L.s("В YouTube", "On YouTube"));
         yt.setAllCaps(false);
         yt.setOnClickListener(v -> { String t = field.getText().toString().trim(); if (!t.isEmpty()) { tv.youtubeSearch(t); field.setText(""); } });
         Button send = new Button(this);
-        send.setText("Ввести");
+        send.setText(L.s("Ввести", "Enter"));
         send.setAllCaps(false);
         send.setOnClickListener(v -> { String t = field.getText().toString(); if (!t.trim().isEmpty()) { tv.typeText(t, true); field.setText(""); } });
         btns.addView(del, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -556,7 +669,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         btns.addView(send, new LinearLayout.LayoutParams(0, -2, 1.4f));
         box.addView(btns);
         field.setOnEditorActionListener((v, a, ev) -> { send.performClick(); return true; });
-        new AlertDialog.Builder(this).setTitle("Клавиатура").setView(box).setPositiveButton("Закрыть", null).show();
+        new AlertDialog.Builder(this).setTitle(L.s("Клавиатура", "Keyboard")).setView(box).setPositiveButton(L.s("Закрыть", "Close"), null).show();
         field.requestFocus();
     }
 
@@ -587,7 +700,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang());
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang());
         i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
-        i.putExtra(RecognizerIntent.EXTRA_PROMPT, lang().startsWith("ru") ? "Скажите, что искать" : "Say what to search");
+        i.putExtra(RecognizerIntent.EXTRA_PROMPT, lang().startsWith("ru") ? L.s("Скажите, что искать", "Say what to search") : "Say what to search");
         return i;
     }
 
@@ -595,20 +708,20 @@ public class MainActivity extends Activity implements TvClient.Listener {
         try {
             if (recognizer == null) recognizer = SpeechRecognizer.createSpeechRecognizer(this);
             recognizer.setRecognitionListener(new RecognitionListener() {
-                @Override public void onReadyForSpeech(Bundle b) { statusLine.setText("🎤 Говорите…"); }
+                @Override public void onReadyForSpeech(Bundle b) { statusLine.setText(L.s("🎤 Говорите…", "🎤 Speak…")); }
                 @Override public void onBeginningOfSpeech() { }
                 @Override public void onRmsChanged(float v) { }
                 @Override public void onBufferReceived(byte[] b) { }
-                @Override public void onEndOfSpeech() { statusLine.setText("🎤 Распознаю…"); }
+                @Override public void onEndOfSpeech() { statusLine.setText(L.s("🎤 Распознаю…", "🎤 Recognizing…")); }
                 @Override public void onPartialResults(Bundle b) { }
                 @Override public void onEvent(int t, Bundle b) { }
                 @Override public void onError(int code) {
-                    log("голос: ошибка " + code);
+                    log(L.s("голос: ошибка ", "voice: error ") + code);
                     restoreStatus();
                     if (code == SpeechRecognizer.ERROR_NO_MATCH || code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                        toast("Не расслышал, попробуйте ещё раз");
+                        toast(L.s("Не расслышал, попробуйте ещё раз", "Didn't catch that, try again"));
                     } else {
-                        toast("Голос не сработал (код " + code + "), открываю голосовой ввод Google");
+                        toast(L.s("Голос не сработал (код ", "Voice failed (code ") + code + L.s("), открываю голосовой ввод Google", "), opening Google voice input"));
                         voiceIntent();
                     }
                 }
@@ -616,12 +729,12 @@ public class MainActivity extends Activity implements TvClient.Listener {
                     restoreStatus();
                     ArrayList<String> res = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                     if (res != null && !res.isEmpty()) handleVoiceText(res.get(0));
-                    else toast("Не расслышал, попробуйте ещё раз");
+                    else toast(L.s("Не расслышал, попробуйте ещё раз", "Didn't catch that, try again"));
                 }
             });
             recognizer.startListening(speechIntent());
         } catch (Exception e) {
-            log("голос: " + e);
+            log(L.s("голос: ", "voice: ") + e);
             voiceIntent();
         }
     }
@@ -630,13 +743,13 @@ public class MainActivity extends Activity implements TvClient.Listener {
         try {
             startActivityForResult(speechIntent(), REQ_VOICE_INTENT);
         } catch (ActivityNotFoundException e) {
-            toast("На телефоне нет голосового ввода — установите приложение Google");
+            toast(L.s("На телефоне нет голосового ввода — установите приложение Google", "No voice input on this phone — install the Google app"));
         }
     }
 
     private void handleVoiceText(String t) {
-        log("голос: «" + t + "»" + (voiceToYoutube ? " → YouTube" : " → поле поиска"));
-        toast("Ищу: " + t);
+        log(L.s("голос: «", "voice: “") + t + "»" + (voiceToYoutube ? " → YouTube" : L.s(" → поле поиска", " → search field")));
+        flash("🎤 " + t);
         if (voiceToYoutube) tv.youtubeSearch(t);
         else tv.typeText(t, true);
     }
@@ -656,27 +769,27 @@ public class MainActivity extends Activity implements TvClient.Listener {
         String mac = prefs.getString("mac", "");
         if (mac.isEmpty()) {
             new AlertDialog.Builder(this)
-                    .setTitle("Включение с телефона")
-                    .setMessage("Телефон ещё не знает MAC-адрес телевизора.\n\n"
-                            + "1) Включите ТВ обычным пультом и откройте это приложение один раз — MAC запомнится сам.\n"
-                            + "2) На ТВ включите: Настройки → Общие → Устройства → TV On With Mobile → Turn on via Wi-Fi.\n\n"
-                            + "Или введите MAC вручную в настройках пульта.")
-                    .setPositiveButton("Понятно", null)
+                    .setTitle(L.s("Включение с телефона", "Turn on from phone"))
+                    .setMessage(L.s("Телефон ещё не знает MAC-адрес телевизора.\n\n", "The phone doesn't know the TV's MAC address yet.\n\n")
+                            + L.s("1) Включите ТВ обычным пультом и откройте это приложение один раз — MAC запомнится сам.\n", "1) Turn the TV on with the normal remote and open this app once — the MAC is saved automatically.\n")
+                            + L.s("2) На ТВ включите: Настройки → Общие → Устройства → TV On With Mobile → Turn on via Wi-Fi.\n\n", "2) On the TV enable: Settings → General → Devices → TV On With Mobile → Turn on via Wi-Fi.\n\n")
+                            + L.s("Или введите MAC вручную в настройках пульта.", "Or enter the MAC manually in remote settings."))
+                    .setPositiveButton(L.s("Понятно", "OK"), null)
                     .show();
             return;
         }
-        statusLine.setText("Включаю телевизор…");
+        statusLine.setText(L.s("Включаю телевизор…", "Turning the TV on…"));
         final List<String> bc = broadcasts();
         new Thread(() -> {
             try {
                 Net.wake(mac, bc);
-                ui.post(() -> toast("Сигнал включения отправлен"));
+                ui.post(() -> toast(L.s("Сигнал включения отправлен", "Power-on signal sent")));
                 for (int k = 0; k < 6 && !tv.isConnected(); k++) {
                     Thread.sleep(2500);
                     tv.connect();
                 }
             } catch (Exception e) {
-                ui.post(() -> toast("Не удалось: " + e.getMessage()));
+                ui.post(() -> toast(L.s("Не удалось: ", "Failed: ") + e.getMessage()));
             }
         }).start();
     }
@@ -708,13 +821,13 @@ public class MainActivity extends Activity implements TvClient.Listener {
     // ---------------- settings & discovery ----------------
 
     private void firstRunDiscover() {
-        statusLine.setText("Ищу телевизор в Wi-Fi…");
+        statusLine.setText(L.s("Ищу телевизор в Wi-Fi…", "Looking for the TV on Wi-Fi…"));
         discover(ips -> {
             if (ips.size() == 1) {
                 saveIp(ips.get(0));
-                toast("Нашёл телевизор: " + ips.get(0));
+                toast(L.s("Нашёл телевизор: ", "Found TV: ") + ips.get(0));
             } else if (ips.isEmpty()) {
-                statusLine.setText("Телевизор не найден — включите его и нажмите ⚙");
+                statusLine.setText(L.s("Телевизор не найден — включите его и нажмите ⚙", "TV not found — turn it on and tap ⚙"));
             } else {
                 pickIp(ips);
             }
@@ -742,7 +855,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
 
     private void pickIp(List<String> ips) {
         String[] arr = ips.toArray(new String[0]);
-        new AlertDialog.Builder(this).setTitle("Найдено несколько ТВ").setItems(arr, (d, w) -> saveIp(arr[w])).show();
+        new AlertDialog.Builder(this).setTitle(L.s("Найдено несколько ТВ", "Several TVs found")).setItems(arr, (d, w) -> saveIp(arr[w])).show();
     }
 
     private void saveIp(String ip) {
@@ -760,21 +873,21 @@ public class MainActivity extends Activity implements TvClient.Listener {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), 0);
         final EditText ipField = new EditText(this);
-        ipField.setHint("IP телевизора, напр. 192.168.1.50");
+        ipField.setHint(L.s("IP телевизора, напр. 192.168.1.50", "TV IP, e.g. 192.168.1.50"));
         ipField.setInputType(InputType.TYPE_CLASS_TEXT);
         ipField.setText(ip());
         final EditText macField = new EditText(this);
-        macField.setHint("MAC (для включения), напр. A1:B2:C3:D4:E5:F6");
+        macField.setHint(L.s("MAC (для включения), напр. A1:B2:C3:D4:E5:F6", "MAC (for power-on), e.g. A1:B2:C3:D4:E5:F6"));
         macField.setText(prefs.getString("mac", ""));
         box.addView(ipField);
         box.addView(macField);
 
         TextView sensT = new TextView(this);
-        sensT.setText("Скорость мыши:");
+        sensT.setText(L.s("Скорость мыши:", "Mouse speed:"));
         sensT.setPadding(0, dp(12), 0, dp(4));
         box.addView(sensT);
         LinearLayout sensRow = row();
-        String[] sl = {"Медленно", "Средне", "Быстро"};
+        String[] sl = {L.s("Медленно", "Slow"), L.s("Средне", "Medium"), L.s("Быстро", "Fast")};
         float[] sv = {1.0f, 1.6f, 2.5f};
         final Button[] sb = new Button[3];
         for (int k = 0; k < 3; k++) {
@@ -792,16 +905,25 @@ public class MainActivity extends Activity implements TvClient.Listener {
         for (int j = 0; j < 3; j++) if (Math.abs(sv[j] - cur) < 0.01f) sb[j].setText("✓ " + sl[j]);
         box.addView(sensRow);
 
+        final Button uiLang = new Button(this);
+        uiLang.setAllCaps(false);
+        uiLang.setText(L.s("Язык приложения: Русский → English", "App language: English → Русский"));
+        uiLang.setOnClickListener(v -> {
+            prefs.edit().putString("ui", L.en ? "ru" : "en").apply();
+            recreate();
+        });
+        box.addView(uiLang, margins(new LinearLayout.LayoutParams(-1, -2), 0, 10, 0, 0));
+
         TextView info = new TextView(this);
-        info.setText("IP на ТВ: Настройки → Общие → Сеть → Wi-Fi → Дополнительно. MAC запоминается сам. Версия " + BuildInfo.VERSION);
+        info.setText(L.s("IP на ТВ: Настройки → Общие → Сеть → Wi-Fi → Дополнительно. MAC запоминается сам. Версия ", "TV IP: Settings → General → Network → Wi-Fi → Advanced. MAC is saved automatically. Version ") + BuildInfo.VERSION);
         info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         info.setPadding(0, dp(8), 0, 0);
         box.addView(info);
 
         new AlertDialog.Builder(this)
-                .setTitle("Настройки пульта")
+                .setTitle(L.s("Настройки пульта", "Remote settings"))
                 .setView(box)
-                .setPositiveButton("Сохранить", (d, w) -> {
+                .setPositiveButton(L.s("Сохранить", "Save"), (d, w) -> {
                     String mac = macField.getText().toString().trim();
                     if (!mac.isEmpty()) {
                         try { Net.parseMac(mac); prefs.edit().putString("mac", mac.toUpperCase()).apply(); }
@@ -810,12 +932,12 @@ public class MainActivity extends Activity implements TvClient.Listener {
                     String newIp = ipField.getText().toString().trim();
                     if (!newIp.isEmpty()) saveIp(newIp);
                 })
-                .setNeutralButton("Найти ТВ", (d, w) -> firstRunDiscover())
-                .setNegativeButton("Сбросить пару", (d, w) -> {
+                .setNeutralButton(L.s("Найти ТВ", "Find TV"), (d, w) -> firstRunDiscover())
+                .setNegativeButton(L.s("Сбросить пару", "Reset pairing"), (d, w) -> {
                     prefs.edit().remove("key").apply();
                     tv.setTarget("", "");
                     if (!ip().isEmpty()) { tv.setTarget(ip(), ""); tv.connect(); }
-                    toast("Подтвердите подключение на телевизоре");
+                    toast(L.s("Подтвердите подключение на телевизоре", "Accept the connection on the TV"));
                 })
                 .show();
     }
@@ -832,7 +954,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
     }
 
     private void restoreStatus() {
-        statusLine.setText(connected ? "Подключено" : "Нет связи");
+        statusLine.setText(connected ? L.s("Подключено", "Connected") : L.s("Нет связи", "Not connected"));
         statusLine.setTextColor(connected ? 0xFF7EE0A0 : C_DIM);
     }
 
@@ -842,7 +964,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
     public void onStatus(String text, boolean isConnected) {
         ui.post(() -> {
             connected = isConnected;
-            statusLine.setText(isConnected ? "Подключено" : text);
+            statusLine.setText(isConnected ? L.s("Подключено", "Connected") + infoText : text);
             statusLine.setTextColor(isConnected ? 0xFF7EE0A0 : C_DIM);
             log(text);
         });
@@ -855,7 +977,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
     public void onMac(String mac) { prefs.edit().putString("mac", mac).apply(); }
 
     @Override
-    public void onError(String text) { ui.post(() -> { log("ошибка: " + text); toast(text); }); }
+    public void onError(String text) { ui.post(() -> { log(L.s("ошибка: ", "error: ") + text); toast(text); }); }
 
     @Override
     public void onLog(String text) { ui.post(() -> log(text)); }
