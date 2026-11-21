@@ -286,19 +286,20 @@ public class MainActivity extends Activity implements TvClient.Listener {
         bar.setGravity(Gravity.CENTER_VERTICAL);
         TextView exit = segItem("◀  " + L.s("Кнопки", "Buttons"), v -> setMode("buttons"));
         exit.setBackground(round(C_KEY, 20));
-        exit.setPadding(dp(14), 0, dp(14), 0);
+        exit.setPadding(dp(12), 0, dp(12), 0);
         bar.addView(exit, new LinearLayout.LayoutParams(-2, dp(44)));
         bar.addView(key(R.drawable.ic_back, null, C_KEY, C_TEXT, 22, 20, L.s("Назад", "Back"), v -> tv.button("BACK")),
-                margins(size(56, 44), 8, 0, 0, 0));
+                margins(size(50, 44), 6, 0, 0, 0));
         bar.addView(key(R.drawable.ic_home, null, C_KEY, C_TEXT, 22, 20, L.s("Домой", "Home"), v -> tv.button("HOME")),
-                margins(size(56, 44), 8, 0, 0, 0));
+                margins(size(50, 44), 6, 0, 0, 0));
         TextView cal = segItem("🎯", v -> autoCalibrate());
         cal.setBackground(round(C_KEY, 20));
         cal.setContentDescription(L.s("Калибровка курсора", "Calibrate cursor"));
-        bar.addView(cal, margins(size(48, 44), 8, 0, 0, 0));
+        bar.addView(cal, margins(size(48, 44), 6, 0, 0, 0));
         bar.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
         eyeFocus = eyeToggle();
-        bar.addView(eyeFocus, new LinearLayout.LayoutParams(-2, dp(44)));
+        eyeFocus.setContentDescription(L.s("Экран ТВ: показать / скрыть", "TV screen: show / hide"));
+        bar.addView(eyeFocus, margins(new LinearLayout.LayoutParams(-2, dp(44)), 6, 0, 0, 0));
         bar.setVisibility(View.GONE);
         root.addView(bar, new LinearLayout.LayoutParams(-1, -2));
         focusBar = bar;
@@ -445,9 +446,8 @@ public class MainActivity extends Activity implements TvClient.Listener {
         }
         if (focusBar != null) focusBar.setVisibility(focus ? View.VISIBLE : View.GONE);
         if (eyeSeg != null) eyeSeg.setVisibility(mouse && !focus ? View.VISIBLE : View.GONE);
-        for (TextView e : new TextView[]{eyeSeg, eyeFocus}) {
-            if (e != null) e.setText(previewOn() ? L.s("👁 Экран ТВ: вкл", "👁 TV screen: on") : L.s("👁 Экран ТВ: выкл", "👁 TV screen: off"));
-        }
+        if (eyeSeg != null) eyeSeg.setText(previewOn() ? L.s("👁 Экран ТВ: вкл", "👁 TV screen: on") : L.s("👁 Экран ТВ: выкл", "👁 TV screen: off"));
+        if (eyeFocus != null) eyeFocus.setText(previewOn() ? "👁 ✓" : "👁 ✕");
     }
 
     private TextView eyeToggle() {
@@ -1339,7 +1339,33 @@ public class MainActivity extends Activity implements TvClient.Listener {
     public void onMac(String mac) { prefs.edit().putString("mac", mac).apply(); }
 
     @Override
-    public void onError(String text) { ui.post(() -> { log(L.s("ошибка: ", "error: ") + text); toast(text); }); }
+    public void onError(String text) {
+        ui.post(() -> {
+            log(L.s("ошибка: ", "error: ") + text);
+            if (!onWifi()) {
+                statusLine.setText(L.s("Телефон не в Wi-Fi", "Phone is not on Wi-Fi"));
+                toast(L.s("Телефон не подключён к домашнему Wi-Fi — пульт работает только через Wi-Fi, где телевизор",
+                        "The phone is not on your home Wi-Fi — the remote only works on the TV's Wi-Fi"));
+            } else if (text != null && (text.contains("failed to connect") || text.contains("ECONNREFUSED") || text.contains("timed out"))) {
+                toast(L.s("Телевизор не отвечает — он включён и в том же Wi-Fi?", "TV not answering — is it on and on the same Wi-Fi?"));
+            } else {
+                toast(text);
+            }
+        });
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean onWifi() {
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            android.net.Network n = cm.getActiveNetwork();
+            android.net.NetworkCapabilities c = n == null ? null : cm.getNetworkCapabilities(n);
+            return c != null && (c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+                    || c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET));
+        } catch (Exception e) {
+            return true;
+        }
+    }
 
     @Override
     public void onLog(String text) { ui.post(() -> log(text)); }
