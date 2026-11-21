@@ -503,18 +503,33 @@ public class MainActivity extends Activity implements TvClient.Listener {
         pointAt(TvPreview.TV_W / 2, TvPreview.TV_H / 2, false);
     }
 
-    // Two-point calibration: the pointer is sent a known distance from the corner twice,
-    // the user taps where it really is each time → scale and offset per axis.
-    private static final int[][] CAL_UNITS = {{400, 225}, {1200, 675}};
+    // Two-point calibration. Point 1 is close to the corner (always on screen); from it the pointer speed is
+    // estimated, and point 2 is chosen so it lands at ~70% of the screen — never off the edge.
+    private static final int[] CAL_FIRST = {200, 120};
     private int calStep = -1;
+    private final int[][] calUnits = new int[2][];
     private final float[][] calTaps = new float[2][];
+
+    /** LG hides an idle pointer after a few seconds — nudge it back and forth while we wait for a tap. */
+    private final Runnable keepPointerAwake = new Runnable() {
+        @Override public void run() {
+            if (calStep < 0) return;
+            tv.nudge(1, 0);
+            tv.nudge(-1, 0);
+            ui.postDelayed(this, 1500);
+        }
+    };
 
     private void startCalibration() {
         if (preview == null) return;
         calStep = 0;
-        tv.pointTo(CAL_UNITS[0][0], CAL_UNITS[0][1], false);
+        calUnits[0] = CAL_FIRST;
+        tv.pointTo(CAL_FIRST[0], CAL_FIRST[1], false);
         preview.setCursor(0, 0, false);
-        String m = L.s("Калибровка 1 из 2: коснитесь картинки там, где курсор на ТВ", "Calibration 1 of 2: tap the picture where the TV cursor is");
+        ui.removeCallbacks(keepPointerAwake);
+        ui.postDelayed(keepPointerAwake, 1500);
+        String m = L.s("Калибровка 1 из 2: курсор слева вверху — коснитесь картинки там, где он на ТВ",
+                "Calibration 1 of 2: the pointer is top-left — tap the picture where it is on the TV");
         flash(m);
         toast(m);
     }
@@ -522,22 +537,31 @@ public class MainActivity extends Activity implements TvClient.Listener {
     private void calibrationTap(float[] t) {
         calTaps[calStep] = t;
         if (calStep == 0) {
+            // rough speed from point 1 (offset assumed small), then aim point 2 at ~70% of the screen
+            float kx0 = Math.max(0.3f, Math.min(6f, t[0] / CAL_FIRST[0]));
+            float ky0 = Math.max(0.3f, Math.min(6f, t[1] / CAL_FIRST[1]));
+            calUnits[1] = new int[]{Math.round(TvPreview.TV_W * 0.70f / kx0), Math.round(TvPreview.TV_H * 0.70f / ky0)};
             calStep = 1;
-            tv.pointTo(CAL_UNITS[1][0], CAL_UNITS[1][1], false);
-            String m = L.s("Калибровка 2 из 2: снова коснитесь, где курсор на ТВ", "Calibration 2 of 2: tap again where the TV cursor is");
+            tv.pointTo(calUnits[1][0], calUnits[1][1], false);
+            String m = L.s("Калибровка 2 из 2: курсор справа внизу — снова коснитесь, где он на ТВ",
+                    "Calibration 2 of 2: the pointer is bottom-right — tap again where it is on the TV");
             flash(m);
             toast(m);
             return;
         }
         calStep = -1;
-        float du = CAL_UNITS[1][0] - CAL_UNITS[0][0], dv = CAL_UNITS[1][1] - CAL_UNITS[0][1];
+        ui.removeCallbacks(keepPointerAwake);
+        float du = calUnits[1][0] - calUnits[0][0], dv = calUnits[1][1] - calUnits[0][1];
         float kx = (calTaps[1][0] - calTaps[0][0]) / du, ky = (calTaps[1][1] - calTaps[0][1]) / dv;
-        if (kx < 0.1f || ky < 0.1f || kx > 10f || ky > 10f) {
-            toast(L.s("Калибровка не удалась — точки слишком близко. Попробуйте ещё раз 🎯", "Calibration failed — points too close. Try 🎯 again"));
+        if (du < 50 || dv < 50 || kx < 0.1f || ky < 0.1f || kx > 10f || ky > 10f) {
+            toast(L.s("Калибровка не удалась — попробуйте ещё раз 🎯", "Calibration failed — try 🎯 again"));
             return;
         }
-        float ox = calTaps[0][0] - kx * CAL_UNITS[0][0], oy = calTaps[0][1] - ky * CAL_UNITS[0][1];
+        float ox = calTaps[0][0] - kx * calUnits[0][0], oy = calTaps[0][1] - ky * calUnits[0][1];
         prefs.edit().putFloat("p2kx", kx).putFloat("p2ky", ky).putFloat("p2ox", ox).putFloat("p2oy", oy).apply();
+        samples.clear();
+        samples.add(new float[]{calUnits[0][0], calUnits[0][1], calTaps[0][0], calTaps[0][1]});
+        samples.add(new float[]{calUnits[1][0], calUnits[1][1], calTaps[1][0], calTaps[1][1]});
         log(String.format(java.util.Locale.US, "калибровка: kx=%.3f ky=%.3f ox=%.0f oy=%.0f", kx, ky, ox, oy));
         curX = calTaps[1][0];
         curY = calTaps[1][1];
@@ -682,12 +706,24 @@ public class MainActivity extends Activity implements TvClient.Listener {
         if (aiming) return;
         aiming = true;
         flash(L.s("Калибрую сам, не трогайте 5–10 секунд…", "Calibrating, hands off for 5–10 s…"));
+        samples.clear();
         new Thread(() -> {
             int found = 0;
             try {
-                int[][] pts = {{300, 200}, {1100, 650}, {700, 400}};
                 int[] prev = grabGrid();
-                for (int[] u : pts) {
+                java.util.List<int[]> pts = new java.util.ArrayList<>();
+                pts.add(new int[]{CAL_FIRST[0], CAL_FIRST[1]});
+                for (int idx = 0; idx < 3; idx++) {
+                    if (idx == 1 && samples.size() > 0) {
+                        // speed estimate from the first measurement → keep the next points on screen
+                        float[] s0 = samples.get(samples.size() - 1);
+                        float kx0 = Math.max(0.3f, Math.min(6f, s0[2] / Math.max(1f, s0[0])));
+                        float ky0 = Math.max(0.3f, Math.min(6f, s0[3] / Math.max(1f, s0[1])));
+                        pts.add(new int[]{Math.round(TvPreview.TV_W * 0.70f / kx0), Math.round(TvPreview.TV_H * 0.70f / ky0)});
+                        pts.add(new int[]{Math.round(TvPreview.TV_W * 0.40f / kx0), Math.round(TvPreview.TV_H * 0.45f / ky0)});
+                    }
+                    if (idx >= pts.size()) break;
+                    int[] u = pts.get(idx);
                     tv.pointTo(u[0], u[1], false).get(15, java.util.concurrent.TimeUnit.SECONDS);
                     sleepQ(350);
                     int[] g = grabGrid();
@@ -698,6 +734,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
                     ui.post(() -> log(line));
                     if (p != null) { addSample(u[0], u[1], p[0], p[1]); found++; }
                     if (g != null) prev = g;
+                    if (idx == 0 && p == null) break;   // can't see it near the corner → no point going on
                 }
             } catch (Exception e) {
                 ui.post(() -> log("calib: " + e));
