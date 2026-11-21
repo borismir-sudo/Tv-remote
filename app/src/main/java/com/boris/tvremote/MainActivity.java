@@ -420,7 +420,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         cur.setColorFilter(0xFF3A414C, PorterDuff.Mode.SRC_IN);
         hints.addView(cur, size(32, 32));
         TextView h1 = text(L.s("Водите пальцем — курсор на ТВ", "Move your finger — cursor on TV"), 14, 0xFFC9CED6, true);
-        TextView h2 = text(L.s("касание — клик · двумя пальцами — прокрутка", "tap — click · two fingers — scroll"), 12, C_DIM, false);
+        TextView h2 = text(L.s("касание — клик · двумя пальцами — стрелки (листать)", "tap — click · two fingers — arrows (scroll)"), 12, C_DIM, false);
         h1.setGravity(Gravity.CENTER);
         h2.setGravity(Gravity.CENTER);
         hints.addView(h1, margins(new LinearLayout.LayoutParams(-2, -2), 0, 6, 0, 0));
@@ -740,6 +740,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
     /** Converts finger movement into pointer moves / clicks / scrolls, sent ~60 times a second. */
     private class PadTouch implements View.OnTouchListener {
         float lastX, lastY, travel;
+        float twoX, twoY;   // two-finger swipe accumulated (dp)
         long downAt;
         boolean twoFinger, active;
         float accX, accY, accScroll;
@@ -777,15 +778,33 @@ public class MainActivity extends Activity implements TvClient.Listener {
                     return true;
                 case MotionEvent.ACTION_POINTER_DOWN:
                     twoFinger = true;
+                    lastX = avgX(e);
                     lastY = avgY(e);
+                    twoX = twoY = 0;
                     return true;
                 case MotionEvent.ACTION_MOVE: {
                     if (twoFinger && e.getPointerCount() >= 2) {
-                        float y = avgY(e);
-                        float d = (y - lastY) / density;
+                        // Two fingers = arrow keys (YouTube & most TV apps scroll with arrows, not with the pointer).
+                        float x = avgX(e), y = avgY(e);
+                        twoX += (x - lastX) / density;
+                        twoY += (y - lastY) / density;
+                        lastX = x;
                         lastY = y;
-                        travel += Math.abs(d);
-                        accScroll += -d * 1.2f;   // finger up = page scrolls down
+                        travel += 1;
+                        final float STEP = 45f;   // dp of swipe per key press
+                        while (Math.abs(twoX) >= STEP || Math.abs(twoY) >= STEP) {
+                            String key;
+                            if (Math.abs(twoY) >= Math.abs(twoX)) {
+                                key = twoY < 0 ? "DOWN" : "UP";        // swipe up = show what's below
+                                twoY -= Math.signum(twoY) * STEP;
+                            } else {
+                                key = twoX < 0 ? "RIGHT" : "LEFT";     // swipe left = show what's to the right
+                                twoX -= Math.signum(twoX) * STEP;
+                            }
+                            tv.button(key);
+                            v.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+                            flash(arrowLabel(key));
+                        }
                     } else if (!twoFinger) {
                         float dx = (e.getX() - lastX) / density, dy = (e.getY() - lastY) / density;
                         lastX = e.getX(); lastY = e.getY();
@@ -815,10 +834,25 @@ public class MainActivity extends Activity implements TvClient.Listener {
             }
         }
 
+        private float avgX(MotionEvent e) {
+            float s = 0;
+            for (int k = 0; k < e.getPointerCount(); k++) s += e.getX(k);
+            return s / e.getPointerCount();
+        }
+
         private float avgY(MotionEvent e) {
             float s = 0;
             for (int k = 0; k < e.getPointerCount(); k++) s += e.getY(k);
             return s / e.getPointerCount();
+        }
+    }
+
+    private static String arrowLabel(String key) {
+        switch (key) {
+            case "UP": return "▲ " + L.s("Вверх", "Up");
+            case "DOWN": return "▼ " + L.s("Вниз", "Down");
+            case "LEFT": return "◀ " + L.s("Влево", "Left");
+            default: return "▶ " + L.s("Вправо", "Right");
         }
     }
 
