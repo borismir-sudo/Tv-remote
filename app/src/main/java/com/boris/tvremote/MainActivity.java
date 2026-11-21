@@ -184,6 +184,9 @@ public class MainActivity extends Activity implements TvClient.Listener {
         if (id.startsWith("youtube")) return "YouTube";
         if (id.equals("netflix")) return "Netflix";
         if (id.equals("amazon")) return "Prime Video";
+        if (id.contains("disney")) return "Disney+";
+        if (id.contains("hulu")) return "Hulu";
+        if (id.contains("max") && id.contains("hbo")) return "Max";
         if (id.startsWith("com.webos.app.hdmi")) return "HDMI " + id.substring("com.webos.app.hdmi".length());
         if (id.equals("com.webos.app.livetv")) return L.s("Эфирное ТВ", "Live TV");
         if (id.contains("home") || id.contains("launcher")) return L.s("Главный экран", "Home screen");
@@ -530,6 +533,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
     // ---------------- closed-loop aiming: move, look at a screenshot, find the pointer, correct ----------------
 
     private volatile boolean aiming;
+    private volatile boolean lastGrabBlack;
     private volatile Boolean pointerInShots;   // null = not known yet
     private int findMisses;
     private final ArrayList<float[]> samples = new ArrayList<>();   // {ux, uy, px, py} measured from the corner
@@ -544,7 +548,8 @@ public class MainActivity extends Activity implements TvClient.Listener {
         android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
         o.inSampleSize = 2;
         android.graphics.Bitmap b = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length, o);
-        if (b == null || isBlack(b)) return null;
+        lastGrabBlack = b != null && isBlack(b);
+        if (b == null || lastGrabBlack) return null;
         ui.post(() -> { if (preview != null) preview.setBitmap(b); });
         android.graphics.Bitmap s = android.graphics.Bitmap.createScaledBitmap(b, CursorFinder.GW, CursorFinder.GH, true);
         int[] px = new int[CursorFinder.GW * CursorFinder.GH];
@@ -630,6 +635,37 @@ public class MainActivity extends Activity implements TvClient.Listener {
         if (aiming || preview == null) return;
         if (!previewOn() || Boolean.FALSE.equals(pointerInShots)) { startCalibration(); return; }
         aiming = true;
+        flash(L.s("Проверяю картинку…", "Checking the picture…"));
+        new Thread(() -> {
+            int[] first = grabGrid();
+            aiming = false;
+            final boolean black = first == null && lastGrabBlack;
+            final boolean none = first == null && !lastGrabBlack;
+            ui.post(() -> {
+                if (black) {
+                    new AlertDialog.Builder(this)
+                            .setTitle(L.s("Картинка защищена", "Picture is protected"))
+                            .setMessage(L.s("Сейчас на телевизоре приложение с защитой (фильм, Disney+, Netflix…) — снимок экрана чёрный, курсор не видно.\n\nПерейти на главный экран и откалибровать там? Фильм можно будет открыть снова.",
+                                    "A protected app is on the TV (movie, Disney+, Netflix…) — the screenshot is black, the pointer can't be seen.\n\nGo to the Home screen and calibrate there? You can reopen the movie after."))
+                            .setPositiveButton(L.s("Да, на главный", "Yes, go Home"), (d, w) -> {
+                                tv.button("HOME");
+                                flash(L.s("Жду главный экран…", "Waiting for Home…"));
+                                ui.postDelayed(this::runAutoCalibration, 3000);
+                            })
+                            .setNegativeButton(L.s("Отмена", "Cancel"), null)
+                            .show();
+                } else if (none) {
+                    toast(L.s("Телевизор не отдал снимок экрана — подробности в журнале 📋", "The TV gave no screenshot — see log 📋"));
+                } else {
+                    runAutoCalibration();
+                }
+            });
+        }).start();
+    }
+
+    private void runAutoCalibration() {
+        if (aiming) return;
+        aiming = true;
         flash(L.s("Калибрую сам, не трогайте 5–10 секунд…", "Calibrating, hands off for 5–10 s…"));
         new Thread(() -> {
             int found = 0;
@@ -638,12 +674,15 @@ public class MainActivity extends Activity implements TvClient.Listener {
                 int[] prev = grabGrid();
                 for (int[] u : pts) {
                     tv.pointTo(u[0], u[1], false).get(15, java.util.concurrent.TimeUnit.SECONDS);
-                    sleepQ(300);
+                    sleepQ(350);
                     int[] g = grabGrid();
                     float ex = ox() + kx() * u[0], ey = oy() + ky() * u[1];
                     float[] p = CursorFinder.find(prev, g, ex, ey, 900);
+                    final String line = "🎯 " + u[0] + "," + u[1] + " → " + (p == null ? L.s("курсор не найден", "pointer not found")
+                            : String.format(java.util.Locale.US, "%.0f,%.0f", p[0], p[1]));
+                    ui.post(() -> log(line));
                     if (p != null) { addSample(u[0], u[1], p[0], p[1]); found++; }
-                    prev = g;
+                    if (g != null) prev = g;
                 }
             } catch (Exception e) {
                 ui.post(() -> log("calib: " + e));

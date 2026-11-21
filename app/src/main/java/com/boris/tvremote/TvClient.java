@@ -52,12 +52,11 @@ public class TvClient {
     public TvClient(Listener listener) { this.listener = listener; }
 
     public void setTarget(String ip, String clientKey) {
-        exec.execute(() -> {
-            boolean changed = this.ip == null || !this.ip.equals(ip);
-            this.ip = ip;
-            this.clientKey = (clientKey == null || clientKey.isEmpty()) ? null : clientKey;
-            if (changed) dropConnections();
-        });
+        // Set the address right away so the mouse / screenshot threads never see an empty IP.
+        final boolean changed = this.ip == null || !this.ip.equals(ip);
+        this.ip = ip;
+        this.clientKey = (clientKey == null || clientKey.isEmpty()) ? null : clientKey;
+        if (changed) exec.execute(this::dropConnections);
     }
 
     public String getIp() { return ip; }
