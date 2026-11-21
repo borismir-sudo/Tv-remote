@@ -71,7 +71,11 @@ public class MainActivity extends Activity implements TvClient.Listener {
     private View dpad, pad;
     private View padDot;
     private TextView flashView;
-    private ImageView shotView;
+    private TvPreview preview;
+    private View playRow;
+    private boolean shotInFlight;
+    private long lastTouchAt;
+    private float curX = TvPreview.TV_W / 2, curY = TvPreview.TV_H / 2;
     private View padHints;
     private boolean resumed;
     private String infoText = "";
@@ -129,20 +133,46 @@ public class MainActivity extends Activity implements TvClient.Listener {
     private final Runnable shotPoll = new Runnable() {
         @Override public void run() {
             if (!resumed) return;
-            if (connected && pad != null && pad.getVisibility() == View.VISIBLE) {
-                tv.requestScreenshot(jpeg -> ui.post(() -> showShot(jpeg)));
+            boolean touching = SystemClock.uptimeMillis() - lastTouchAt < 3000;
+            if (connected && previewOn() && pad != null && pad.getVisibility() == View.VISIBLE && !shotInFlight) {
+                shotInFlight = true;
+                tv.requestScreenshot(jpeg -> ui.post(() -> { shotInFlight = false; showShot(jpeg); }));
             }
-            ui.postDelayed(this, 1500);
+            ui.postDelayed(this, touching ? 700 : 1500);
         }
     };
 
+    private boolean previewOn() { return prefs.getBoolean("preview", true); }
+
     private void showShot(byte[] jpeg) {
-        if (jpeg == null || shotView == null) return;
-        android.graphics.Bitmap b = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
+        if (preview == null) return;
+        if (jpeg == null) {
+            if (!preview.hasBitmap()) preview.setMessage(L.s("Нет картинки с телевизора — см. журнал 📋", "No picture from the TV — see log 📋"));
+            return;
+        }
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inSampleSize = 2;   // a phone-sized preview is plenty
+        android.graphics.Bitmap b = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length, o);
         if (b == null) return;
-        shotView.setImageBitmap(b);
-        shotView.setVisibility(View.VISIBLE);
-        if (padHints != null) padHints.setVisibility(View.GONE);
+        if (isBlack(b)) {
+            // keep the last good frame instead of flashing black
+            if (!preview.hasBitmap()) preview.setMessage(L.s("ТВ отдаёт чёрный кадр (так бывает в фильмах)", "TV returns a black frame (common in movies)"));
+            return;
+        }
+        preview.setBitmap(b);
+    }
+
+    private static boolean isBlack(android.graphics.Bitmap b) {
+        long sum = 0;
+        int n = 0;
+        for (int y = 1; y < 12; y++) {
+            for (int x = 1; x < 12; x++) {
+                int c = b.getPixel(b.getWidth() * x / 12, b.getHeight() * y / 12);
+                sum += ((c >> 16) & 0xff) + ((c >> 8) & 0xff) + (c & 0xff);
+                n += 3;
+            }
+        }
+        return n > 0 && sum / n < 12;
     }
 
     private static String appName(String id) {
@@ -307,6 +337,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         play.addView(key(R.drawable.ic_playpause, null, C_KEY, C_TEXT, 14, 22, L.s("Пауза / воспроизведение", "Play / pause"), v -> playPause()), weightLp(8));
         play.addView(key(R.drawable.ic_ff, null, C_KEY, C_TEXT, 14, 22, L.s("Перемотка вперёд", "Fast forward"), v -> tv.button("FASTFORWARD")), weightLp(8));
         root.addView(play, margins(new LinearLayout.LayoutParams(-1, dp(46)), 0, 14, 0, 0));
+        playRow = play;
 
         // --- apps
         LinearLayout apps = row();
@@ -321,19 +352,17 @@ public class MainActivity extends Activity implements TvClient.Listener {
     // ---------------- touchpad ----------------
 
     private View buildPad() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+
+        preview = new TvPreview(this);
+        preview.setMessage(L.s("Экран телевизора появится здесь", "The TV screen will appear here"));
+        box.addView(preview, new LinearLayout.LayoutParams(-1, 0, 1f));
+
         FrameLayout f = new FrameLayout(this);
-        GradientDrawable bg = round(C_PAD, 28);
+        GradientDrawable bg = round(C_PAD, 24);
         bg.setStroke(dp(1), C_PAD_EDGE);
         f.setBackground(bg);
-
-        shotView = new ImageView(this);
-        shotView.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        shotView.setAlpha(0.9f);
-        shotView.setVisibility(View.GONE);
-        shotView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(-1, -1);
-        slp.setMargins(dp(6), dp(6), dp(6), dp(6));
-        f.addView(shotView, slp);
 
         padDot = new View(this);
         padDot.setBackground(oval(C_OK));
@@ -346,18 +375,34 @@ public class MainActivity extends Activity implements TvClient.Listener {
         ImageView cur = new ImageView(this);
         cur.setImageResource(R.drawable.ic_cursor);
         cur.setColorFilter(0xFF3A414C, PorterDuff.Mode.SRC_IN);
-        hints.addView(cur, size(40, 40));
-        TextView h1 = text(L.s("Водите пальцем — курсор на ТВ", "Move your finger — cursor on TV"), 15, 0xFFC9CED6, true);
+        hints.addView(cur, size(32, 32));
+        TextView h1 = text(L.s("Водите пальцем — курсор на ТВ", "Move your finger — cursor on TV"), 14, 0xFFC9CED6, true);
         TextView h2 = text(L.s("касание — клик · двумя пальцами — прокрутка", "tap — click · two fingers — scroll"), 12, C_DIM, false);
         h1.setGravity(Gravity.CENTER);
         h2.setGravity(Gravity.CENTER);
-        hints.addView(h1, margins(new LinearLayout.LayoutParams(-2, -2), 0, 10, 0, 0));
-        hints.addView(h2, margins(new LinearLayout.LayoutParams(-2, -2), 0, 4, 0, 0));
+        hints.addView(h1, margins(new LinearLayout.LayoutParams(-2, -2), 0, 6, 0, 0));
+        hints.addView(h2, margins(new LinearLayout.LayoutParams(-2, -2), 0, 2, 0, 0));
         f.addView(hints, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
         padHints = hints;
-
         f.setOnTouchListener(new PadTouch());
-        return f;
+        box.addView(f, margins(new LinearLayout.LayoutParams(-1, 0, 1.25f), 0, 10, 0, 0));
+        applyPreviewSetting();
+        return box;
+    }
+
+    private void applyPreviewSetting() {
+        if (preview != null) preview.setVisibility(previewOn() ? View.VISIBLE : View.GONE);
+        if (playRow != null && pad != null) playRow.setVisibility(pad.getVisibility() == View.VISIBLE && previewOn() ? View.GONE : View.VISIBLE);
+    }
+
+    /** Park the TV pointer in the top-left corner (it stops at the edge), then bring it to the centre, so the drawn cursor matches. */
+    private void syncCursor() {
+        tv.move(-2500, -2500);
+        tv.move(-2500, -2500);
+        tv.move((int) (TvPreview.TV_W / 2), (int) (TvPreview.TV_H / 2));
+        curX = TvPreview.TV_W / 2;
+        curY = TvPreview.TV_H / 2;
+        if (preview != null) preview.setCursor(curX, curY, true);
     }
 
     /** Converts finger movement into pointer moves / clicks / scrolls, sent ~60 times a second. */
@@ -369,7 +414,13 @@ public class MainActivity extends Activity implements TvClient.Listener {
         final Runnable flush = new Runnable() {
             @Override public void run() {
                 int ix = (int) accX, iy = (int) accY, is = (int) accScroll;
-                if (ix != 0 || iy != 0) { tv.move(ix, iy); accX -= ix; accY -= iy; }
+                if (ix != 0 || iy != 0) {
+                    tv.move(ix, iy);
+                    accX -= ix; accY -= iy;
+                    curX = Math.max(0, Math.min(TvPreview.TV_W, curX + ix));
+                    curY = Math.max(0, Math.min(TvPreview.TV_H, curY + iy));
+                    if (preview != null) preview.setCursor(curX, curY, true);
+                }
                 if (is != 0) { tv.scroll(0, is); accScroll -= is; }
                 if (active) ui.postDelayed(this, 16);
             }
@@ -379,6 +430,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         public boolean onTouch(View v, MotionEvent e) {
             // Never let a parent take the gesture away mid-swipe.
             v.getParent().requestDisallowInterceptTouchEvent(true);
+            lastTouchAt = SystemClock.uptimeMillis();
             float density = getResources().getDisplayMetrics().density;
             float sens = prefs.getFloat("sens", 1.6f);
             switch (e.getActionMasked()) {
@@ -452,9 +504,14 @@ public class MainActivity extends Activity implements TvClient.Listener {
         prefs.edit().putString("mode", mouse ? "mouse" : "buttons").apply();
         dpad.setVisibility(mouse ? View.GONE : View.VISIBLE);
         pad.setVisibility(mouse ? View.VISIBLE : View.GONE);
+        if (playRow != null) playRow.setVisibility(mouse && previewOn() ? View.GONE : View.VISIBLE);
         styleSeg(segButtons, !mouse);
         styleSeg(segMouse, mouse);
-        if (mouse && !ip().isEmpty()) { tv.prepareInput(); tv.resetScreenshot(); }
+        if (mouse && !ip().isEmpty()) {
+            tv.prepareInput();
+            tv.resetScreenshot();
+            if (previewOn()) syncCursor();
+        }
     }
 
     private void setLang(String l) {
@@ -904,6 +961,18 @@ public class MainActivity extends Activity implements TvClient.Listener {
         float cur = prefs.getFloat("sens", 1.6f);
         for (int j = 0; j < 3; j++) if (Math.abs(sv[j] - cur) < 0.01f) sb[j].setText("✓ " + sl[j]);
         box.addView(sensRow);
+
+        final Button prevBtn = new Button(this);
+        prevBtn.setAllCaps(false);
+        Runnable prevLabel = () -> prevBtn.setText(L.s("Экран ТВ над тачпадом: ", "TV screen above touchpad: ")
+                + (previewOn() ? L.s("показывать", "show") : L.s("скрыть", "hide")));
+        prevLabel.run();
+        prevBtn.setOnClickListener(v -> {
+            prefs.edit().putBoolean("preview", !previewOn()).apply();
+            prevLabel.run();
+            applyPreviewSetting();
+        });
+        box.addView(prevBtn, margins(new LinearLayout.LayoutParams(-1, -2), 0, 10, 0, 0));
 
         final Button uiLang = new Button(this);
         uiLang.setAllCaps(false);
