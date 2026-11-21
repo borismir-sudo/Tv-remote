@@ -1123,10 +1123,46 @@ public class MainActivity extends Activity implements TvClient.Listener {
                     tv.openBrowser(toUrl(t));
                     flash("🌐 " + (t.isEmpty() ? L.s("Браузер", "Browser") : t));
                 })
-                .setNeutralButton("YouTube.com", (d, w) -> tv.openBrowser("https://www.youtube.com"))
+                .setNeutralButton(L.s("📱 Chrome с телефона", "📱 Chrome from phone"), (d, w) -> mirrorPhone())
                 .setNegativeButton(L.s("Отмена", "Cancel"), null)
                 .show();
         field.requestFocus();
+    }
+
+    /**
+     * Chrome can't run on webOS, so show the phone's Chrome on the TV: open the phone's screen-mirroring
+     * (Smart View / Cast) panel, the user picks the LG TV, then opens Chrome on the phone.
+     */
+    private void mirrorPhone() {
+        String[] actions = {"android.settings.CAST_SETTINGS", "android.settings.WIFI_DISPLAY_SETTINGS"};
+        for (String a : actions) {
+            try {
+                startActivity(new Intent(a));
+                new AlertDialog.Builder(this)
+                        .setTitle(L.s("Chrome на телевизоре", "Chrome on the TV"))
+                        .setMessage(L.s("1) В открывшемся списке выберите телевизор LG (на ТВ может появиться запрос — нажмите «Принять»).\n"
+                                        + "2) Вернитесь и нажмите «Открыть Chrome» — всё, что на телефоне, будет на экране ТВ.\n"
+                                        + "3) Остановить: потяните шторку уведомлений на телефоне → Smart View → Отключить.",
+                                "1) In the list that opened, pick the LG TV (the TV may ask — press Accept).\n"
+                                        + "2) Come back and tap “Open Chrome” — the phone screen shows on the TV.\n"
+                                        + "3) To stop: pull down notifications → Smart View → Disconnect."))
+                        .setPositiveButton(L.s("Открыть Chrome", "Open Chrome"), (d, w) -> openPhoneChrome())
+                        .setNegativeButton(L.s("Закрыть", "Close"), null)
+                        .show();
+                return;
+            } catch (Exception ignored) { }
+        }
+        toast(L.s("Откройте шторку уведомлений → Smart View → выберите телевизор LG", "Pull down notifications → Smart View → pick the LG TV"));
+    }
+
+    private void openPhoneChrome() {
+        try {
+            Intent i = getPackageManager().getLaunchIntentForPackage("com.android.chrome");
+            if (i == null) i = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.google.com"));
+            startActivity(i);
+        } catch (Exception e) {
+            toast(L.s("Chrome не найден на телефоне", "Chrome not found on this phone"));
+        }
     }
 
     private static String toUrl(String t) {
