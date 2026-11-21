@@ -243,7 +243,7 @@ public class TvClient {
         }
     }
 
-    private void sendInput(String msg) throws Exception {
+    private WsConn ensureInput() throws Exception {
         WsConn in = input;
         if (in == null || !in.isOpen()) {
             Map<String, Object> r = request("com.webos.service.networkinput/getPointerInputSocket", null);
@@ -252,8 +252,36 @@ public class TvClient {
             in = openInput(path);
             input = in;
         }
-        in.sendText(msg);
+        return in;
     }
+
+    private void sendInput(String msg) throws Exception {
+        ensureInput().sendText(msg);
+    }
+
+    /** Open the pointer/key socket ahead of time so the touchpad reacts instantly. */
+    public void prepareInput() {
+        exec.execute(() -> { try { ensureInput(); } catch (Exception e) { listener.onLog("сокет мыши: " + e.getMessage()); } });
+    }
+
+    private volatile long lastPointerError;
+
+    private void pointer(String msg) {
+        exec.execute(() -> {
+            try {
+                sendInput(msg);
+            } catch (Exception e) {
+                closeInput();
+                long now = System.currentTimeMillis();
+                if (now - lastPointerError > 3000) { lastPointerError = now; fail(e); }
+            }
+        });
+    }
+
+    /** Move the TV's on-screen pointer (Magic Remote style). */
+    public void move(int dx, int dy) { pointer("type:move\ndx:" + dx + "\ndy:" + dy + "\ndown:0\n\n"); }
+    public void click() { pointer("type:click\n\n"); listener.onLog("клик мышью"); }
+    public void scroll(int dx, int dy) { pointer("type:scroll\ndx:" + dx + "\ndy:" + dy + "\n\n"); }
 
     private WsConn openInput(String path) throws IOException {
         WsConn.Handler h = new WsConn.Handler() {
