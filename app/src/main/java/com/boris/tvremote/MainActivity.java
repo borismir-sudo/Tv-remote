@@ -438,8 +438,8 @@ public class MainActivity extends Activity implements TvClient.Listener {
                 {R.drawable.ic_right, "RIGHT", Gravity.END | Gravity.CENTER_VERTICAL, 40, 64}};
         for (Object[] ed : edges) {
             final String k = (String) ed[1];
-            FrameLayout arrowKey = key((Integer) ed[0], null, 0xCC23272E, C_TEXT, 14, 24, arrowLabel(k), v -> tv.button(k));
-            autoRepeat(arrowKey, () -> { tv.button(k); });
+            FrameLayout arrowKey = key((Integer) ed[0], null, 0xCC23272E, C_TEXT, 14, 24, arrowLabel(k), v -> { });
+            holdArrow(arrowKey, k);
             FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp((Integer) ed[3]), dp((Integer) ed[4]), (Integer) ed[2]);
             lp.setMargins(dp(6), dp(6), dp(6), dp(6));
             f.addView(arrowKey, lp);
@@ -493,6 +493,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
 
     /** Put the TV pointer exactly at a point of the picture (and click if asked). */
     private void pointAt(float px, float py, boolean click) {
+        lastPointerAt = SystemClock.uptimeMillis();
         tv.pointTo(unitsX(px), unitsY(py), click);
         curX = px;
         curY = py;
@@ -801,6 +802,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
             @Override public void run() {
                 int ix = (int) accX, iy = (int) accY, is = (int) accScroll;
                 if (ix != 0 || iy != 0) {
+                    lastPointerAt = SystemClock.uptimeMillis();
                     tv.move(ix, iy);
                     accX -= ix; accY -= iy;
                     curX = Math.max(0, Math.min(TvPreview.TV_W, curX + ix * kx()));
@@ -854,7 +856,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
                                 key = twoX < 0 ? "RIGHT" : "LEFT";     // swipe left = show what's to the right
                                 twoX -= Math.signum(twoX) * STEP;
                             }
-                            tv.button(key);
+                            arrowNow(key);
                             v.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
                             flash(arrowLabel(key));
                         }
@@ -1021,6 +1023,45 @@ public class MainActivity extends Activity implements TvClient.Listener {
         r.addView(l, margins(new LinearLayout.LayoutParams(-1, -2), 0, 4, 0, 4));
         r.addView(b, new LinearLayout.LayoutParams(-1, dp(62)));
         return r;
+    }
+
+    private long lastPointerAt;
+
+    /**
+     * Arrow that acts the moment it is touched and keeps going while held.
+     * When the TV pointer was just used, LG spends the first arrow press only on leaving pointer mode,
+     * so in that case one extra press is sent first.
+     */
+    private void arrowNow(String k) {
+        if (SystemClock.uptimeMillis() - lastPointerAt < 15000) {
+            tv.button(k);
+            lastPointerAt = 0;
+        }
+        tv.button(k);
+    }
+
+    private void holdArrow(View v, String k) {
+        final Runnable[] rep = new Runnable[1];
+        rep[0] = () -> { tv.button(k); ui.postDelayed(rep[0], 110); };
+        v.setOnTouchListener((x, e) -> {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    x.getParent().requestDisallowInterceptTouchEvent(true);
+                    x.setPressed(true);
+                    haptic(x);
+                    arrowNow(k);
+                    flash(arrowLabel(k));
+                    ui.postDelayed(rep[0], 300);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    x.setPressed(false);
+                    ui.removeCallbacks(rep[0]);
+                    return true;
+                default:
+                    return true;
+            }
+        });
     }
 
     private void autoRepeat(View v, Runnable action) {
