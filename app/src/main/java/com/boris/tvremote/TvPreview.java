@@ -45,6 +45,12 @@ public class TvPreview extends View {
         setContentDescription("Экран телевизора");
     }
 
+    /** View coordinates → TV pixels, or null if outside the drawn screen. */
+    public float[] toTv(float x, float y) {
+        if (screen.width() <= 0 || !screen.contains(x, y)) return null;
+        return new float[]{(x - screen.left) / screen.width() * TV_W, (y - screen.top) / screen.height() * TV_H};
+    }
+
     public void setBitmap(Bitmap b) { bitmap = b; message = null; invalidate(); }
     public boolean hasBitmap() { return bitmap != null; }
     public void setMessage(String m) { message = m; invalidate(); }

@@ -291,6 +291,10 @@ public class MainActivity extends Activity implements TvClient.Listener {
                 margins(size(56, 44), 8, 0, 0, 0));
         bar.addView(key(R.drawable.ic_home, null, C_KEY, C_TEXT, 22, 20, L.s("Домой", "Home"), v -> tv.button("HOME")),
                 margins(size(56, 44), 8, 0, 0, 0));
+        TextView cal = segItem("🎯", v -> startCalibration());
+        cal.setBackground(round(C_KEY, 20));
+        cal.setContentDescription(L.s("Калибровка курсора", "Calibrate cursor"));
+        bar.addView(cal, margins(size(48, 44), 8, 0, 0, 0));
         bar.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
         eyeFocus = eyeToggle();
         bar.addView(eyeFocus, new LinearLayout.LayoutParams(-2, dp(44)));
@@ -452,13 +456,43 @@ public class MainActivity extends Activity implements TvClient.Listener {
     }
 
     /** Park the TV pointer in the top-left corner (it stops at the edge), then bring it to the centre, so the drawn cursor matches. */
+    private static final int CAL_X = 800, CAL_Y = 450;   // units sent after parking in the corner
+
+    /** Park the TV pointer in the top-left corner (it stops at the edge), then move a known distance. */
     private void syncCursor() {
-        tv.move(-2500, -2500);
-        tv.move(-2500, -2500);
-        tv.move((int) (TvPreview.TV_W / 2), (int) (TvPreview.TV_H / 2));
-        curX = TvPreview.TV_W / 2;
-        curY = TvPreview.TV_H / 2;
+        tv.moveExact(-4000, -4000);          // sent as many small steps; ends exactly in the corner
+        tv.moveExact(CAL_X, CAL_Y);
+        curX = Math.min(TvPreview.TV_W, CAL_X * prefs.getFloat("kx", 1f));
+        curY = Math.min(TvPreview.TV_H, CAL_Y * prefs.getFloat("ky", 1f));
         if (preview != null) preview.setCursor(curX, curY, true);
+    }
+
+    private boolean calibrating;
+
+    /** One-tap calibration: park + move a known distance, then the user taps where the TV cursor really is. */
+    private void startCalibration() {
+        if (preview == null) return;
+        calibrating = true;
+        tv.moveExact(-4000, -4000);
+        tv.moveExact(CAL_X, CAL_Y);
+        preview.setCursor(0, 0, false);
+        flash(L.s("Коснитесь на картинке, где сейчас курсор на ТВ", "Tap on the picture where the TV cursor is now"));
+        toast(L.s("Коснитесь на картинке, где сейчас курсор на ТВ", "Tap on the picture where the TV cursor is now"));
+        preview.setOnTouchListener((v, e) -> {
+            if (!calibrating || e.getActionMasked() != MotionEvent.ACTION_UP) return calibrating;
+            float[] t = preview.toTv(e.getX(), e.getY());
+            if (t == null) return true;
+            float kx = Math.max(0.2f, Math.min(5f, t[0] / CAL_X));
+            float ky = Math.max(0.2f, Math.min(5f, t[1] / CAL_Y));
+            prefs.edit().putFloat("kx", kx).putFloat("ky", ky).apply();
+            calibrating = false;
+            curX = t[0];
+            curY = t[1];
+            preview.setCursor(curX, curY, true);
+            log(String.format(java.util.Locale.US, "калибровка: kx=%.2f ky=%.2f", kx, ky));
+            flash(L.s("Готово — курсор выровнен", "Done — cursor aligned"));
+            return true;
+        });
     }
 
     /** Converts finger movement into pointer moves / clicks / scrolls, sent ~60 times a second. */
@@ -473,8 +507,8 @@ public class MainActivity extends Activity implements TvClient.Listener {
                 if (ix != 0 || iy != 0) {
                     tv.move(ix, iy);
                     accX -= ix; accY -= iy;
-                    curX = Math.max(0, Math.min(TvPreview.TV_W, curX + ix));
-                    curY = Math.max(0, Math.min(TvPreview.TV_H, curY + iy));
+                    curX = Math.max(0, Math.min(TvPreview.TV_W, curX + ix * prefs.getFloat("kx", 1f)));
+                    curY = Math.max(0, Math.min(TvPreview.TV_H, curY + iy * prefs.getFloat("ky", 1f)));
                     if (preview != null) preview.setCursor(curX, curY, true);
                 }
                 if (is != 0) { tv.scroll(0, is); accScroll -= is; }

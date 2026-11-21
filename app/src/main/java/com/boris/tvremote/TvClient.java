@@ -422,6 +422,21 @@ public class TvClient {
     /** Allow another attempt after the user changes what's on screen. */
     public void resetScreenshot() { slow.execute(() -> { shotUnsupported = false; shotFailures = 0; }); }
 
+    static final int MAX_STEP = 40;
+
+    /** The TV clips large single steps, so send big moves as several small ones. */
+    private void sendChunked(int x, int y) {
+        while (x != 0 || y != 0) {
+            int sx = Math.max(-MAX_STEP, Math.min(MAX_STEP, x));
+            int sy = Math.max(-MAX_STEP, Math.min(MAX_STEP, y));
+            pointerNow("type:move\ndx:" + sx + "\ndy:" + sy + "\ndown:0\n\n");
+            x -= sx;
+            y -= sy;
+        }
+    }
+
+    /** An exact move that is never merged with finger moves (used to park / calibrate the cursor). */
+    public void moveExact(int dx, int dy) { ptr.execute(() -> sendChunked(dx, dy)); }
     private final Object moveLock = new Object();
     private int moveDx, moveDy;
     private boolean moveQueued;
@@ -437,7 +452,7 @@ public class TvClient {
         ptr.execute(() -> {
             int x, y;
             synchronized (moveLock) { x = moveDx; y = moveDy; moveDx = 0; moveDy = 0; moveQueued = false; }
-            if (x != 0 || y != 0) pointerNow("type:move\ndx:" + x + "\ndy:" + y + "\ndown:0\n\n");
+            sendChunked(x, y);
         });
     }
 
