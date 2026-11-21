@@ -22,6 +22,7 @@ public class TvClient {
         void onClientKey(String key);
         void onMac(String mac);
         void onError(String text);
+        void onLog(String text);
     }
 
     static final int CONNECT_TIMEOUT_MS = 4000;
@@ -89,24 +90,34 @@ public class TvClient {
         });
     }
 
-    public void volumeUp() { ssap("audio/volumeUp"); }
-    public void volumeDown() { ssap("audio/volumeDown"); }
-    public void channelUp() { ssap("tv/channelUp"); }
-    public void channelDown() { ssap("tv/channelDown"); }
+    /** Press a key like the real remote; if the key socket fails, try the SSAP command. */
+    private void key(String button, String fallbackUri) {
+        exec.execute(() -> {
+            try {
+                sendInput("type:button\nname:" + button + "\n\n");
+                listener.onLog("кнопка " + button);
+            } catch (Exception e) {
+                listener.onLog("кнопка " + button + " не прошла: " + e.getMessage());
+                if (fallbackUri == null) { fail(e); return; }
+                try { request(fallbackUri, null); } catch (Exception e2) { fail(e2); }
+            }
+        });
+    }
+
+    public void volumeUp() { key("VOLUMEUP", "audio/volumeUp"); }
+    public void volumeDown() { key("VOLUMEDOWN", "audio/volumeDown"); }
+    public void channelUp() { key("CHANNELUP", "tv/channelUp"); }
+    public void channelDown() { key("CHANNELDOWN", "tv/channelDown"); }
+    public void toggleMute() { key("MUTE", null); }
     public void powerOff() { ssap("system/turnOff"); }
     public void launch(String appId) { ssap("system.launcher/launch", Json.map("id", appId)); }
 
-    public void toggleMute() {
-        exec.execute(() -> {
-            try {
-                Map<String, Object> st = request("audio/getStatus", null);
-                boolean muted = st != null && Boolean.TRUE.equals(st.get("mute"));
-                request("audio/setMute", Json.map("mute", !muted));
-            } catch (Exception e) {
-                // fall back to the MUTE key
-                try { sendInput("type:button\nname:MUTE\n\n"); } catch (Exception e2) { fail(e2); }
-            }
-        });
+    /** Open YouTube on the TV with a search query. */
+    public void youtubeSearch(String query) {
+        String q;
+        try { q = java.net.URLEncoder.encode(query, "UTF-8"); } catch (Exception e) { q = query; }
+        ssap("system.launcher/launch", Json.map("id", "youtube.leanback.v4",
+                "contentId", "https://www.youtube.com/tv?launch=voice&vq=" + q));
     }
 
     /** Type text into the TV's active text field and optionally press Enter. */
@@ -115,7 +126,10 @@ public class TvClient {
             try {
                 request("com.webos.service.ime/insertText", Json.map("text", text, "replace", Boolean.FALSE));
                 if (enter) request("com.webos.service.ime/sendEnterKey", null);
-            } catch (Exception e) { fail(e); }
+            } catch (Exception e) {
+                listener.onLog("ввод текста не прошёл (" + e.getMessage() + ") → ищу в YouTube");
+                youtubeSearch(text);
+            }
         });
     }
 
@@ -216,7 +230,8 @@ public class TvClient {
             if (payload != null) msg.put("payload", payload);
             main.sendText(Json.stringify(msg));
             Map<String, Object> r = q.poll(RESPONSE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-            if (r == null) throw new IOException("Телевизор не ответил");
+            if (r == null) { listener.onLog(uri + " → нет ответа"); throw new IOException("Телевизор не ответил"); }
+            listener.onLog(uri + " → " + abbreviate(Json.stringify(r.get("type")) + " " + Json.stringify(r.containsKey("error") ? r.get("error") : r.get("payload"))));
             if ("error".equals(r.get("type"))) throw new IOException(String.valueOf(r.get("error")));
             Map<String, Object> p = Json.obj(r.get("payload"));
             if (p != null && Boolean.FALSE.equals(p.get("returnValue"))) {
@@ -278,6 +293,8 @@ public class TvClient {
     }
 
     // ---------------- helpers ----------------
+
+    static String abbreviate(String t) { return t.length() > 160 ? t.substring(0, 160) + "…" : t; }
 
     @SuppressWarnings("unchecked")
     static String findMac(Object o) {

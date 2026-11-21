@@ -14,7 +14,11 @@ import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -34,8 +38,8 @@ import java.util.List;
 
 public class MainActivity extends Activity implements TvClient.Listener {
 
-    private static final int REQ_VOICE_RU = 101;
-    private static final int REQ_VOICE_EN = 102;
+    private static final int REQ_VOICE_INTENT = 101;
+    private static final int REQ_MIC = 201;
 
     private static final int C_BG = 0xFF111418;
     private static final int C_KEY = 0xFF262B33;
@@ -50,6 +54,11 @@ public class MainActivity extends Activity implements TvClient.Listener {
     private TextView status;
     private EditText textField;
     private LinearLayout keypad;
+    private TextView logView;
+    private Button langBtn;
+    private SpeechRecognizer recognizer;
+    private boolean voiceToYoutube;
+    private final java.util.ArrayDeque<String> logLines = new java.util.ArrayDeque<>();
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     @Override
@@ -74,6 +83,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
 
     @Override
     protected void onDestroy() {
+        if (recognizer != null) recognizer.destroy();
         tv.shutdown();
         super.onDestroy();
     }
@@ -99,9 +109,21 @@ public class MainActivity extends Activity implements TvClient.Listener {
         status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         status.setText(ip().isEmpty() ? "Телевизор не настроен" : "Телевизор: " + ip());
         header.addView(status, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        Button logBtn = key("📋", C_KEY, v -> logView.setVisibility(logView.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+        header.addView(logBtn, new LinearLayout.LayoutParams(dp(56), dp(48)));
         Button gear = key("⚙", C_KEY, v -> showSettings());
         header.addView(gear, new LinearLayout.LayoutParams(dp(56), dp(48)));
         root.addView(header);
+        logView = new TextView(this);
+        logView.setTextColor(0xFF9FD3A8);
+        logView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        logView.setTypeface(Typeface.MONOSPACE);
+        logView.setTextIsSelectable(true);
+        logView.setBackgroundColor(0xFF0A0C0F);
+        logView.setPadding(dp(8), dp(6), dp(8), dp(6));
+        logView.setText("Журнал пуст");
+        logView.setVisibility(View.GONE);
+        root.addView(logView);
 
         // Power
         root.addView(row(
@@ -177,9 +199,13 @@ public class MainActivity extends Activity implements TvClient.Listener {
         textField.setImeOptions(EditorInfo.IME_ACTION_SEND);
         textField.setOnEditorActionListener((v, actionId, ev) -> { sendText(); return true; });
         root.addView(textField);
+        langBtn = key(prefs.getString("lang", "ru-RU").startsWith("ru") ? "RU" : "EN", C_KEY, v -> toggleLang());
         root.addView(row(
-                key("🎤 RU", C_APP, v -> voice(REQ_VOICE_RU)),
-                key("🎤 EN", C_APP, v -> voice(REQ_VOICE_EN)),
+                key("🎤 В поиск ТВ", C_APP, v -> voice(false)),
+                key("🎤 YouTube", C_APP, v -> voice(true)),
+                langBtn));
+        root.addView(row(
+                key("YouTube 🔍", C_APP, v -> { String t = textField.getText().toString().trim(); if (!t.isEmpty()) { tv.youtubeSearch(t); textField.setText(""); } }),
                 key("⌫", C_KEY, v -> tv.deleteChars(1)),
                 key("Ввод ➜", C_OK, v -> sendText())));
 
@@ -272,31 +298,109 @@ public class MainActivity extends Activity implements TvClient.Listener {
         textField.setText("");
     }
 
-    private void voice(int req) {
+    private String lang() { return prefs.getString("lang", "ru-RU"); }
+
+    private void toggleLang() {
+        String n = lang().startsWith("ru") ? "en-US" : "ru-RU";
+        prefs.edit().putString("lang", n).apply();
+        langBtn.setText(n.startsWith("ru") ? "RU" : "EN");
+    }
+
+    private void voice(boolean toYoutube) {
+        voiceToYoutube = toYoutube;
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) { voiceIntent(); return; }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_MIC);
+            return;
+        }
+        startListening();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode == REQ_MIC) {
+            if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) startListening();
+            else voiceIntent();
+        }
+    }
+
+    private Intent speechIntent() {
         Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        String lang = req == REQ_VOICE_RU ? "ru-RU" : "en-US";
-        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang);
-        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang);
-        i.putExtra(RecognizerIntent.EXTRA_PROMPT, req == REQ_VOICE_RU ? "Скажите, что искать" : "Say what to search");
+        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang());
+        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang());
+        i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+        i.putExtra(RecognizerIntent.EXTRA_PROMPT, lang().startsWith("ru") ? "Скажите, что искать" : "Say what to search");
+        return i;
+    }
+
+    private void startListening() {
         try {
-            startActivityForResult(i, req);
-        } catch (ActivityNotFoundException e) {
-            toast("На телефоне нет голосового ввода Google");
+            if (recognizer == null) recognizer = SpeechRecognizer.createSpeechRecognizer(this);
+            recognizer.setRecognitionListener(new RecognitionListener() {
+                @Override public void onReadyForSpeech(Bundle b) { status.setText("🎤 Говорите…"); }
+                @Override public void onBeginningOfSpeech() { }
+                @Override public void onRmsChanged(float v) { }
+                @Override public void onBufferReceived(byte[] b) { }
+                @Override public void onEndOfSpeech() { status.setText("🎤 Распознаю…"); }
+                @Override public void onPartialResults(Bundle b) { }
+                @Override public void onEvent(int t, Bundle b) { }
+                @Override public void onError(int code) {
+                    log("голос: ошибка " + code);
+                    status.setText(tv.isConnected() ? "🟢 Подключено: " + ip() : "⚪ " + ip());
+                    if (code == SpeechRecognizer.ERROR_NO_MATCH || code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                        toast("Не расслышал, попробуйте ещё раз");
+                    } else {
+                        toast("Голос не сработал (код " + code + "), открываю голосовой ввод Google");
+                        voiceIntent();
+                    }
+                }
+                @Override public void onResults(Bundle b) {
+                    status.setText(tv.isConnected() ? "🟢 Подключено: " + ip() : "⚪ " + ip());
+                    ArrayList<String> res = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                    if (res != null && !res.isEmpty()) handleVoiceText(res.get(0));
+                    else toast("Не расслышал, попробуйте ещё раз");
+                }
+            });
+            recognizer.startListening(speechIntent());
+        } catch (Exception e) {
+            log("голос: " + e);
+            voiceIntent();
         }
+    }
+
+    private void voiceIntent() {
+        try {
+            startActivityForResult(speechIntent(), REQ_VOICE_INTENT);
+        } catch (ActivityNotFoundException e) {
+            toast("На телефоне нет голосового ввода — установите приложение Google");
+        }
+    }
+
+    private void handleVoiceText(String t) {
+        log("голос: «" + t + "»" + (voiceToYoutube ? " → YouTube" : " → поле поиска"));
+        toast("Ищу: " + t);
+        if (voiceToYoutube) tv.youtubeSearch(t);
+        else tv.typeText(t, true);
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if ((requestCode == REQ_VOICE_RU || requestCode == REQ_VOICE_EN) && resultCode == RESULT_OK && data != null) {
+        if (requestCode == REQ_VOICE_INTENT && resultCode == RESULT_OK && data != null) {
             ArrayList<String> res = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
-            if (res != null && !res.isEmpty()) {
-                String t = res.get(0);
-                toast("Ищу: " + t);
-                tv.typeText(t, true);
-            }
+            if (res != null && !res.isEmpty()) handleVoiceText(res.get(0));
         }
+    }
+
+    private void log(String line) {
+        String ts = new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(new java.util.Date());
+        logLines.addFirst(ts + " " + line);
+        while (logLines.size() > 40) logLines.removeLast();
+        StringBuilder b = new StringBuilder();
+        for (String l : logLines) b.append(l).append('\n');
+        logView.setText(b.toString().trim());
     }
 
     private void powerOn() {
@@ -426,7 +530,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         box.addView(info);
 
         new AlertDialog.Builder(this)
-                .setTitle("Настройки пульта")
+                .setTitle("Настройки пульта (v" + BuildInfo.VERSION + ")")
                 .setView(box)
                 .setPositiveButton("Сохранить", (d, w) -> {
                     String mac = macField.getText().toString().trim();
@@ -453,6 +557,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
     public void onStatus(String text, boolean connected) {
         ui.post(() -> {
             status.setText((connected ? "🟢 " : "⚪ ") + text);
+            log(text);
             status.setTextColor(connected ? 0xFF7EE0A0 : 0xFFB0B8C4);
         });
     }
@@ -464,5 +569,8 @@ public class MainActivity extends Activity implements TvClient.Listener {
     public void onMac(String mac) { prefs.edit().putString("mac", mac).apply(); }
 
     @Override
-    public void onError(String text) { ui.post(() -> toast(text)); }
+    public void onError(String text) { ui.post(() -> { log("ошибка: " + text); toast(text); }); }
+
+    @Override
+    public void onLog(String text) { ui.post(() -> log(text)); }
 }
