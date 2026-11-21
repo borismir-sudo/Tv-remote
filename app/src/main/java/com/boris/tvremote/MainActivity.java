@@ -428,6 +428,21 @@ public class MainActivity extends Activity implements TvClient.Listener {
         f.addView(hints, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
         padHints = hints;
         f.setOnTouchListener(new PadTouch());
+
+        // Arrow keys on the touchpad edges (YouTube rows etc. move with arrows). Held = repeat.
+        Object[][] edges = {
+                {R.drawable.ic_up, "UP", Gravity.TOP | Gravity.CENTER_HORIZONTAL, 64, 40},
+                {R.drawable.ic_down, "DOWN", Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL, 64, 40},
+                {R.drawable.ic_left, "LEFT", Gravity.START | Gravity.CENTER_VERTICAL, 40, 64},
+                {R.drawable.ic_right, "RIGHT", Gravity.END | Gravity.CENTER_VERTICAL, 40, 64}};
+        for (Object[] ed : edges) {
+            final String k = (String) ed[1];
+            FrameLayout arrowKey = key((Integer) ed[0], null, 0xCC23272E, C_TEXT, 14, 24, arrowLabel(k), v -> tv.button(k));
+            autoRepeat(arrowKey, () -> { tv.button(k); });
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp((Integer) ed[3]), dp((Integer) ed[4]), (Integer) ed[2]);
+            lp.setMargins(dp(6), dp(6), dp(6), dp(6));
+            f.addView(arrowKey, lp);
+        }
         box.addView(f, margins(new LinearLayout.LayoutParams(-1, 0, 1.25f), 0, 10, 0, 0));
         applyPreviewSetting();
         return box;
