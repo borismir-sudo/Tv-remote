@@ -11,7 +11,9 @@ import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.PorterDuff;
 import android.graphics.Typeface;
+import android.content.res.ColorStateList;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.DhcpInfo;
 import android.net.wifi.WifiManager;
 import android.os.Bundle;
@@ -32,10 +34,8 @@ import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
-import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -67,7 +67,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private TextView statusLine, tvName, logView;
-    private TextView segButtons, segMouse;
+    private TextView segButtons, segMouse, langRu, langEn;
     private View dpad, pad;
     private View padDot;
     private SpeechRecognizer recognizer;
@@ -112,134 +112,110 @@ public class MainActivity extends Activity implements TvClient.Listener {
     // =====================================================================
 
     private View buildUi() {
-        ScrollView sv = new ScrollView(this);
-        sv.setBackgroundColor(C_BG);
-        sv.setFillViewport(true);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(14), dp(20), dp(18));
-        sv.addView(root);
+        root.setBackgroundColor(C_BG);
+        root.setPadding(dp(16), dp(10), dp(16), dp(14));
 
-        // --- header: status / name, log, settings, power
-        LinearLayout header = new LinearLayout(this);
+        // --- header: status / name · log · settings · power
+        LinearLayout header = row();
         header.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout names = new LinearLayout(this);
         names.setOrientation(LinearLayout.VERTICAL);
         statusLine = text("Нет связи", 12, C_DIM, false);
         tvName = text(ip().isEmpty() ? "Телевизор не настроен" : "LG · " + ip(), 16, C_TEXT, true);
+        tvName.setSingleLine(true);
         names.addView(statusLine);
         names.addView(tvName);
-        header.addView(names, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        header.addView(icon(R.drawable.ic_list, 0, C_DIM, 22, "Журнал",
+        header.addView(names, new LinearLayout.LayoutParams(0, -2, 1f));
+        header.addView(key(R.drawable.ic_list, null, 0, C_DIM, -1, 22, "Журнал",
                 v -> logView.setVisibility(logView.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE)), size(44, 44));
-        header.addView(icon(R.drawable.ic_cog, 0, C_DIM, 22, "Настройки пульта", v -> showSettings()), size(44, 44));
-        ImageButton power = icon(R.drawable.ic_power, C_POWER, Color.WHITE, 24, "Питание", v -> powerToggle());
+        header.addView(key(R.drawable.ic_cog, null, 0, C_DIM, -1, 22, "Настройки пульта", v -> showSettings()), size(44, 44));
+        View power = key(R.drawable.ic_power, null, C_POWER, Color.WHITE, -1, 24, "Питание", v -> powerToggle());
         power.setOnLongClickListener(v -> { haptic(v); powerOn(); return true; });
-        header.addView(power, withMargins(size(52, 52), 6, 0, 0, 0));
-        root.addView(header);
+        header.addView(power, margins(size(52, 52), 8, 0, 0, 0));
+        root.addView(header, new LinearLayout.LayoutParams(-1, dp(56)));
 
-        logView = text("Журнал пуст", 11, 0xFF9FD3A8, false);
-        logView.setTypeface(Typeface.MONOSPACE);
-        logView.setTextIsSelectable(true);
-        logView.setBackgroundColor(0xFF0A0C0F);
-        logView.setPadding(dp(8), dp(6), dp(8), dp(6));
-        logView.setVisibility(View.GONE);
-        root.addView(logView, withMargins(new LinearLayout.LayoutParams(-1, -2), 0, 8, 0, 0));
-
-        // --- back / home / menu / keyboard
-        LinearLayout nav = row(Gravity.CENTER);
-        nav.addView(pill(R.drawable.ic_back, "Назад", v -> tv.button("BACK")), withMargins(size(70, 50), 6, 0, 6, 0));
-        nav.addView(pill(R.drawable.ic_home, "Домой", v -> tv.button("HOME")), withMargins(size(70, 50), 6, 0, 6, 0));
-        nav.addView(pill(R.drawable.ic_menu, "Меню телевизора", v -> tv.button("MENU")), withMargins(size(70, 50), 6, 0, 6, 0));
-        nav.addView(pill(R.drawable.ic_kbd, "Клавиатура", v -> showKeyboard()), withMargins(size(70, 50), 6, 0, 6, 0));
-        root.addView(nav, withMargins(new LinearLayout.LayoutParams(-1, -2), 0, 14, 0, 0));
+        // --- back · home · mute · menu · keyboard
+        LinearLayout nav = row();
+        nav.addView(key(R.drawable.ic_back, null, C_KEY, C_TEXT, 26, 22, "Назад", v -> tv.button("BACK")), weightLp(0));
+        nav.addView(key(R.drawable.ic_home, null, C_KEY, C_TEXT, 26, 22, "Домой", v -> tv.button("HOME")), weightLp(8));
+        nav.addView(key(R.drawable.ic_mute, null, C_KEY, C_TEXT, 26, 22, "Без звука", v -> tv.toggleMute()), weightLp(8));
+        nav.addView(key(R.drawable.ic_menu, null, C_KEY, C_TEXT, 26, 22, "Меню телевизора", v -> tv.button("MENU")), weightLp(8));
+        nav.addView(key(R.drawable.ic_kbd, null, C_KEY, C_TEXT, 26, 22, "Клавиатура", v -> showKeyboard()), weightLp(8));
+        root.addView(nav, margins(new LinearLayout.LayoutParams(-1, dp(52)), 0, 10, 0, 0));
 
         // --- segmented: Кнопки | Мышь
-        LinearLayout seg = new LinearLayout(this);
+        LinearLayout seg = row();
         seg.setPadding(dp(4), dp(4), dp(4), dp(4));
         seg.setBackground(round(C_KEY, 22));
         segButtons = segItem("Кнопки", v -> setMode("buttons"));
         segMouse = segItem("Мышь", v -> setMode("mouse"));
-        seg.addView(segButtons, size(110, 36));
-        seg.addView(segMouse, withMargins(size(110, 36), 4, 0, 0, 0));
-        LinearLayout segRow = row(Gravity.CENTER);
+        seg.addView(segButtons, size(112, 36));
+        seg.addView(segMouse, margins(size(112, 36), 4, 0, 0, 0));
+        LinearLayout segRow = row();
+        segRow.setGravity(Gravity.CENTER);
         segRow.addView(seg);
-        root.addView(segRow, withMargins(new LinearLayout.LayoutParams(-1, -2), 0, 14, 0, 0));
+        root.addView(segRow, margins(new LinearLayout.LayoutParams(-1, -2), 0, 14, 0, 0));
 
-        // --- center: d-pad or touchpad
+        // --- center (fills the free space): d-pad or touchpad; the log overlays it
         FrameLayout center = new FrameLayout(this);
-        dpad = buildDpad();
+        DpadView dv = new DpadView(this, C_KEY, C_OK, C_TEXT);
+        dv.setOnKey(name -> tv.button(name));
+        dpad = dv;
         pad = buildPad();
-        center.addView(dpad, new FrameLayout.LayoutParams(dp(250), dp(250), Gravity.CENTER));
-        center.addView(pad, new FrameLayout.LayoutParams(-1, dp(250), Gravity.CENTER));
-        root.addView(center, withMargins(new LinearLayout.LayoutParams(-1, dp(256)), 0, 12, 0, 0));
+        center.addView(dpad, new FrameLayout.LayoutParams(-1, -1));
+        center.addView(pad, new FrameLayout.LayoutParams(-1, -1));
+        logView = text("Журнал пуст", 11, 0xFF9FD3A8, false);
+        logView.setTypeface(Typeface.MONOSPACE);
+        logView.setBackground(round(0xF00A0C0F, 16));
+        logView.setPadding(dp(10), dp(8), dp(10), dp(8));
+        logView.setVerticalScrollBarEnabled(true);
+        logView.setMovementMethod(new android.text.method.ScrollingMovementMethod());
+        logView.setVisibility(View.GONE);
+        center.addView(logView, new FrameLayout.LayoutParams(-1, -1));
+        root.addView(center, margins(new LinearLayout.LayoutParams(-1, 0, 1f), 0, 14, 0, 14));
 
-        // --- rockers + mic + mute
-        LinearLayout rockers = row(Gravity.CENTER_VERTICAL);
-        rockers.setPadding(dp(10), 0, dp(10), 0);
+        // --- VOL rocker · mic + language · CH rocker
+        LinearLayout rockers = row();
+        rockers.setGravity(Gravity.CENTER_VERTICAL);
         rockers.addView(rocker("VOL", R.drawable.ic_plus, R.drawable.ic_minus, "Громче", "Тише",
-                () -> tv.volumeUp(), () -> tv.volumeDown(), true));
+                () -> tv.volumeUp(), () -> tv.volumeDown(), true), new LinearLayout.LayoutParams(dp(72), -2));
         LinearLayout mid = new LinearLayout(this);
         mid.setOrientation(LinearLayout.VERTICAL);
         mid.setGravity(Gravity.CENTER_HORIZONTAL);
-        ImageButton mic = icon(R.drawable.ic_mic, C_TEXT, C_BG, 34, "Голосовой поиск", v -> voice(false));
+        View mic = key(R.drawable.ic_mic, null, C_TEXT, C_BG, -1, 34, "Голосовой поиск", v -> voice(false));
         mic.setOnLongClickListener(v -> { haptic(v); voice(true); return true; });
         mid.addView(mic, size(84, 84));
-        mid.addView(pill(R.drawable.ic_mute, "Без звука", v -> tv.toggleMute()), withMargins(size(64, 48), 0, 12, 0, 0));
+        LinearLayout langSeg = row();
+        langSeg.setPadding(dp(3), dp(3), dp(3), dp(3));
+        langSeg.setBackground(round(C_KEY, 18));
+        langRu = segItem("RU", v -> setLang("ru-RU"));
+        langEn = segItem("EN", v -> setLang("en-US"));
+        langSeg.addView(langRu, size(52, 32));
+        langSeg.addView(langEn, margins(size(52, 32), 3, 0, 0, 0));
+        mid.addView(langSeg, margins(new LinearLayout.LayoutParams(-2, -2), 0, 12, 0, 0));
         rockers.addView(mid, new LinearLayout.LayoutParams(0, -2, 1f));
         rockers.addView(rocker("CH", R.drawable.ic_up, R.drawable.ic_down, "Канал вверх", "Канал вниз",
-                () -> tv.channelUp(), () -> tv.channelDown(), false));
-        root.addView(rockers, withMargins(new LinearLayout.LayoutParams(-1, -2), 0, 16, 0, 0));
+                () -> tv.channelUp(), () -> tv.channelDown(), false), new LinearLayout.LayoutParams(dp(72), -2));
+        root.addView(rockers, new LinearLayout.LayoutParams(-1, -2));
+        setLang(lang());
 
         // --- playback
-        LinearLayout play = row(Gravity.CENTER);
-        play.addView(pill(R.drawable.ic_rew, "Перемотка назад", v -> tv.button("REWIND")), withMargins(size(70, 44), 6, 0, 6, 0));
-        play.addView(pill(R.drawable.ic_playpause, "Пауза / воспроизведение", v -> playPause()), withMargins(size(70, 44), 6, 0, 6, 0));
-        play.addView(pill(R.drawable.ic_ff, "Перемотка вперёд", v -> tv.button("FASTFORWARD")), withMargins(size(70, 44), 6, 0, 6, 0));
-        root.addView(play, withMargins(new LinearLayout.LayoutParams(-1, -2), 0, 14, 0, 0));
+        LinearLayout play = row();
+        play.addView(key(R.drawable.ic_rew, null, C_KEY, C_TEXT, 14, 22, "Перемотка назад", v -> tv.button("REWIND")), weightLp(0));
+        play.addView(key(R.drawable.ic_playpause, null, C_KEY, C_TEXT, 14, 22, "Пауза / воспроизведение", v -> playPause()), weightLp(8));
+        play.addView(key(R.drawable.ic_ff, null, C_KEY, C_TEXT, 14, 22, "Перемотка вперёд", v -> tv.button("FASTFORWARD")), weightLp(8));
+        root.addView(play, margins(new LinearLayout.LayoutParams(-1, dp(46)), 0, 14, 0, 0));
 
         // --- apps
-        LinearLayout apps = row(Gravity.CENTER);
-        apps.addView(appBtn("YouTube", true, v -> tv.launch("youtube.leanback.v4")), weighted(48));
-        apps.addView(appBtn("Netflix", true, v -> tv.launch("netflix")), weighted(48));
-        apps.addView(appBtn("HDMI", false, v -> showInputs()), weighted(48));
-        apps.addView(appBtn("123", false, v -> showKeypad()), weighted(48));
-        root.addView(apps, withMargins(new LinearLayout.LayoutParams(-1, -2), 0, 16, 0, 0));
-
-        TextView hint = text("Удерживайте 🎤 — поиск сразу в YouTube · ⏻ удерживать — включить", 11, 0xFF5D6673, false);
-        hint.setGravity(Gravity.CENTER);
-        root.addView(hint, withMargins(new LinearLayout.LayoutParams(-1, -2), 0, 12, 0, 0));
-        return sv;
-    }
-
-    private View buildDpad() {
-        FrameLayout f = new FrameLayout(this);
-        f.setBackground(oval(C_KEY));
-        f.addView(arrow(R.drawable.ic_up, "Вверх", "UP"), new FrameLayout.LayoutParams(dp(64), dp(64), Gravity.TOP | Gravity.CENTER_HORIZONTAL));
-        f.addView(arrow(R.drawable.ic_down, "Вниз", "DOWN"), new FrameLayout.LayoutParams(dp(64), dp(64), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL));
-        f.addView(arrow(R.drawable.ic_left, "Влево", "LEFT"), new FrameLayout.LayoutParams(dp(64), dp(64), Gravity.START | Gravity.CENTER_VERTICAL));
-        f.addView(arrow(R.drawable.ic_right, "Вправо", "RIGHT"), new FrameLayout.LayoutParams(dp(64), dp(64), Gravity.END | Gravity.CENTER_VERTICAL));
-        for (int k = 0; k < 4; k++) {
-            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) f.getChildAt(k).getLayoutParams();
-            lp.setMargins(dp(6), dp(6), dp(6), dp(6));
-        }
-        Button ok = new Button(this);
-        ok.setText("OK");
-        ok.setAllCaps(false);
-        ok.setTextColor(Color.WHITE);
-        ok.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
-        ok.setTypeface(Typeface.DEFAULT_BOLD);
-        ok.setBackground(oval(C_OK));
-        ok.setStateListAnimator(null);
-        ok.setOnClickListener(v -> { haptic(v); tv.button("ENTER"); });
-        f.addView(ok, new FrameLayout.LayoutParams(dp(104), dp(104), Gravity.CENTER));
-        return f;
-    }
-
-    private ImageButton arrow(int res, String desc, String key) {
-        ImageButton b = icon(res, 0, C_TEXT, 32, desc, v -> tv.button(key));
-        b.setBackground(null);
-        return b;
+        LinearLayout apps = row();
+        apps.addView(appKey("YouTube", true, v -> tv.launch("youtube.leanback.v4")), weightLp(0));
+        apps.addView(appKey("Netflix", true, v -> tv.launch("netflix")), weightLp(8));
+        apps.addView(appKey("HDMI", false, v -> showInputs()), weightLp(8));
+        apps.addView(appKey("123", false, v -> showKeypad()), weightLp(8));
+        root.addView(apps, margins(new LinearLayout.LayoutParams(-1, dp(46)), 0, 10, 0, 0));
+        return root;
     }
 
     // ---------------- touchpad ----------------
@@ -266,8 +242,8 @@ public class MainActivity extends Activity implements TvClient.Listener {
         TextView h2 = text("касание — клик · двумя пальцами — прокрутка", 12, C_DIM, false);
         h1.setGravity(Gravity.CENTER);
         h2.setGravity(Gravity.CENTER);
-        hints.addView(h1, withMargins(new LinearLayout.LayoutParams(-2, -2), 0, 10, 0, 0));
-        hints.addView(h2, withMargins(new LinearLayout.LayoutParams(-2, -2), 0, 4, 0, 0));
+        hints.addView(h1, margins(new LinearLayout.LayoutParams(-2, -2), 0, 10, 0, 0));
+        hints.addView(h2, margins(new LinearLayout.LayoutParams(-2, -2), 0, 4, 0, 0));
         f.addView(hints, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
         f.setOnTouchListener(new PadTouch());
@@ -291,6 +267,8 @@ public class MainActivity extends Activity implements TvClient.Listener {
 
         @Override
         public boolean onTouch(View v, MotionEvent e) {
+            // Never let a parent take the gesture away mid-swipe.
+            v.getParent().requestDisallowInterceptTouchEvent(true);
             float density = getResources().getDisplayMetrics().density;
             float sens = prefs.getFloat("sens", 1.6f);
             switch (e.getActionMasked()) {
@@ -368,8 +346,15 @@ public class MainActivity extends Activity implements TvClient.Listener {
         if (mouse && !ip().isEmpty()) tv.prepareInput();
     }
 
+    private void setLang(String l) {
+        prefs.edit().putString("lang", l).apply();
+        boolean ru = l.startsWith("ru");
+        styleSeg(langRu, ru);
+        styleSeg(langEn, !ru);
+    }
+
     private void styleSeg(TextView t, boolean on) {
-        t.setBackground(on ? round(C_TEXT, 18) : null);
+        t.setBackground(on ? round(C_TEXT, 16) : null);
         t.setTextColor(on ? C_BG : C_LABEL);
     }
 
@@ -384,27 +369,42 @@ public class MainActivity extends Activity implements TvClient.Listener {
         return t;
     }
 
-    private ImageButton icon(int res, int bg, int fg, int iconDp, String desc, View.OnClickListener l) {
-        ImageButton b = new ImageButton(this);
-        b.setImageResource(res);
-        b.setColorFilter(fg, PorterDuff.Mode.SRC_IN);
-        b.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        b.setContentDescription(desc);
-        b.setBackground(bg == 0 ? null : oval(bg));
-        b.setTag(iconDp);
-        b.addOnLayoutChangeListener((v, l1, t1, r1, b1, ol, ot, orr, ob) -> {
-            int w = r1 - l1, h = b1 - t1, ic = dp(iconDp);
-            int px = Math.max(0, (w - ic) / 2), py = Math.max(0, (h - ic) / 2);
-            if (v.getPaddingLeft() != px || v.getPaddingTop() != py) v.setPadding(px, py, px, py);
-        });
-        b.setOnClickListener(v -> { haptic(v); l.onClick(v); });
-        return b;
+    /**
+     * A key: coloured shape with an icon (or text) exactly centred.
+     * radiusDp = -1 → circle; bg = 0 → transparent.
+     */
+    private FrameLayout key(int iconRes, String label, int bg, int fg, int radiusDp, int iconDp, String desc,
+                            View.OnClickListener l) {
+        FrameLayout f = new FrameLayout(this);
+        GradientDrawable shape = radiusDp < 0 ? oval(bg == 0 ? 0x00000000 : bg) : round(bg, radiusDp);
+        f.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), shape, radiusDp < 0 ? oval(0xFFFFFFFF) : round(0xFFFFFFFF, radiusDp)));
+        if (iconRes != 0) {
+            ImageView iv = new ImageView(this);
+            iv.setImageResource(iconRes);
+            iv.setColorFilter(fg, PorterDuff.Mode.SRC_IN);
+            iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            f.addView(iv, new FrameLayout.LayoutParams(dp(iconDp), dp(iconDp), Gravity.CENTER));
+        } else {
+            TextView t = text(label, 15, fg, true);
+            t.setGravity(Gravity.CENTER);
+            t.setSingleLine(true);
+            f.addView(t, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        }
+        f.setContentDescription(desc != null ? desc : label);
+        f.setClickable(true);
+        f.setFocusable(true);
+        f.setOnClickListener(v -> { haptic(v); l.onClick(v); });
+        return f;
     }
 
-    private ImageButton pill(int res, String desc, View.OnClickListener l) {
-        ImageButton b = icon(res, 0, C_TEXT, 22, desc, l);
-        b.setBackground(round(C_KEY, 25));
-        return b;
+    private FrameLayout appKey(String label, boolean app, View.OnClickListener l) {
+        FrameLayout f = key(0, label, app ? C_APP_BG : C_KEY, app ? C_APP_TEXT : C_TEXT, 14, 0, label, l);
+        if (app) {
+            GradientDrawable g = round(C_APP_BG, 14);
+            g.setStroke(dp(1), C_APP_EDGE);
+            f.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), g, round(0xFFFFFFFF, 14)));
+        }
+        return f;
     }
 
     private TextView segItem(String label, View.OnClickListener l) {
@@ -414,40 +414,23 @@ public class MainActivity extends Activity implements TvClient.Listener {
         return t;
     }
 
-    private Button appBtn(String label, boolean app, View.OnClickListener l) {
-        Button b = new Button(this);
-        b.setText(label);
-        b.setAllCaps(false);
-        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        b.setTypeface(Typeface.DEFAULT_BOLD);
-        b.setTextColor(app ? C_APP_TEXT : C_TEXT);
-        GradientDrawable g = round(app ? C_APP_BG : C_KEY, 14);
-        if (app) g.setStroke(dp(1), C_APP_EDGE);
-        b.setBackground(g);
-        b.setStateListAnimator(null);
-        b.setOnClickListener(v -> { haptic(v); l.onClick(v); });
-        return b;
-    }
-
     /** Vertical rocker (VOL / CH). Volume repeats while held. */
     private View rocker(String label, int topRes, int botRes, String topDesc, String botDesc,
                         Runnable top, Runnable bottom, boolean repeat) {
         LinearLayout r = new LinearLayout(this);
         r.setOrientation(LinearLayout.VERTICAL);
         r.setGravity(Gravity.CENTER_HORIZONTAL);
-        r.setPadding(0, dp(6), 0, dp(6));
+        r.setPadding(dp(4), dp(4), dp(4), dp(4));
         r.setBackground(round(C_KEY, 36));
-        ImageButton t = icon(topRes, 0, C_TEXT, 28, topDesc, v -> top.run());
-        ImageButton b = icon(botRes, 0, C_TEXT, 28, botDesc, v -> bottom.run());
+        View t = key(topRes, null, C_KEY, C_TEXT, 32, 28, topDesc, v -> top.run());
+        View b = key(botRes, null, C_KEY, C_TEXT, 32, 28, botDesc, v -> bottom.run());
         if (repeat) { autoRepeat(t, top); autoRepeat(b, bottom); }
-        r.addView(t, size(64, 60));
+        r.addView(t, new LinearLayout.LayoutParams(-1, dp(62)));
         TextView l = text(label, 12, C_LABEL, true);
         l.setGravity(Gravity.CENTER);
         l.setLetterSpacing(0.1f);
-        r.addView(l, withMargins(new LinearLayout.LayoutParams(-2, -2), 0, 4, 0, 4));
-        r.addView(b, size(64, 60));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(76), -2);
-        r.setLayoutParams(lp);
+        r.addView(l, margins(new LinearLayout.LayoutParams(-1, -2), 0, 4, 0, 4));
+        r.addView(b, new LinearLayout.LayoutParams(-1, dp(62)));
         return r;
     }
 
@@ -462,22 +445,22 @@ public class MainActivity extends Activity implements TvClient.Listener {
         });
     }
 
-    private LinearLayout row(int gravity) {
+    private LinearLayout row() {
         LinearLayout r = new LinearLayout(this);
         r.setOrientation(LinearLayout.HORIZONTAL);
-        r.setGravity(gravity);
         return r;
     }
 
     private LinearLayout.LayoutParams size(int wDp, int hDp) { return new LinearLayout.LayoutParams(dp(wDp), dp(hDp)); }
 
-    private LinearLayout.LayoutParams weighted(int hDp) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(hDp), 1f);
-        lp.setMargins(dp(4), 0, dp(4), 0);
+    /** Equal-width cell filling its row's height, with a left gap. */
+    private LinearLayout.LayoutParams weightLp(int leftGapDp) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -1, 1f);
+        lp.setMargins(dp(leftGapDp), 0, 0, 0);
         return lp;
     }
 
-    private LinearLayout.LayoutParams withMargins(LinearLayout.LayoutParams lp, int l, int t, int r, int b) {
+    private LinearLayout.LayoutParams margins(LinearLayout.LayoutParams lp, int l, int t, int r, int b) {
         lp.setMargins(dp(l), dp(t), dp(r), dp(b));
         return lp;
     }
@@ -532,12 +515,12 @@ public class MainActivity extends Activity implements TvClient.Listener {
         box.setPadding(dp(16), dp(12), dp(16), dp(4));
         String[][] rows = {{"1", "2", "3"}, {"4", "5", "6"}, {"7", "8", "9"}, {"—", "0", "OK"}};
         for (String[] r : rows) {
-            LinearLayout line = row(Gravity.CENTER);
+            LinearLayout line = row();
             for (String d : r) {
                 final String key = d.equals("—") ? "DASH" : d.equals("OK") ? "ENTER" : d;
-                line.addView(appBtn(d, false, v -> tv.button(key)), weighted(56));
+                line.addView(appKey(d, false, v -> tv.button(key)), margins(new LinearLayout.LayoutParams(0, dp(56), 1f), 4, 0, 4, 0));
             }
-            box.addView(line, withMargins(new LinearLayout.LayoutParams(-1, -2), 0, 4, 0, 4));
+            box.addView(line, margins(new LinearLayout.LayoutParams(-1, -2), 0, 4, 0, 4));
         }
         new AlertDialog.Builder(this).setTitle("Номер канала").setView(box).setPositiveButton("Закрыть", null).show();
     }
@@ -556,7 +539,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         field.setInputType(InputType.TYPE_CLASS_TEXT);
         field.setImeOptions(EditorInfo.IME_ACTION_SEND);
         box.addView(field);
-        LinearLayout btns = row(Gravity.CENTER);
+        LinearLayout btns = row();
         Button del = new Button(this);
         del.setText("⌫");
         del.setOnClickListener(v -> tv.deleteChars(1));
@@ -790,7 +773,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         sensT.setText("Скорость мыши:");
         sensT.setPadding(0, dp(12), 0, dp(4));
         box.addView(sensT);
-        LinearLayout sensRow = row(Gravity.CENTER);
+        LinearLayout sensRow = row();
         String[] sl = {"Медленно", "Средне", "Быстро"};
         float[] sv = {1.0f, 1.6f, 2.5f};
         final Button[] sb = new Button[3];
@@ -808,16 +791,6 @@ public class MainActivity extends Activity implements TvClient.Listener {
         float cur = prefs.getFloat("sens", 1.6f);
         for (int j = 0; j < 3; j++) if (Math.abs(sv[j] - cur) < 0.01f) sb[j].setText("✓ " + sl[j]);
         box.addView(sensRow);
-
-        final Button langB = new Button(this);
-        langB.setAllCaps(false);
-        langB.setText("Язык голоса: " + (lang().startsWith("ru") ? "русский" : "английский"));
-        langB.setOnClickListener(v -> {
-            String n = lang().startsWith("ru") ? "en-US" : "ru-RU";
-            prefs.edit().putString("lang", n).apply();
-            langB.setText("Язык голоса: " + (n.startsWith("ru") ? "русский" : "английский"));
-        });
-        box.addView(langB, withMargins(new LinearLayout.LayoutParams(-1, -2), 0, 8, 0, 0));
 
         TextView info = new TextView(this);
         info.setText("IP на ТВ: Настройки → Общие → Сеть → Wi-Fi → Дополнительно. MAC запоминается сам. Версия " + BuildInfo.VERSION);
