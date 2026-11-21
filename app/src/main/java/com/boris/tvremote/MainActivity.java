@@ -92,6 +92,8 @@ public class MainActivity extends Activity implements TvClient.Listener {
         getWindow().setNavigationBarColor(C_BG);
         prefs = getSharedPreferences("tv", MODE_PRIVATE);
         L.en = "en".equals(prefs.getString("ui", "ru"));
+        // Start-up look Boris chose: mouse mode, full remote visible, TV screen preview off.
+        prefs.edit().putString("mode", "mouse").putBoolean("preview", false).apply();
         tv = new TvClient(this);
         setContentView(buildUi());
         setMode(prefs.getString("mode", "buttons"));

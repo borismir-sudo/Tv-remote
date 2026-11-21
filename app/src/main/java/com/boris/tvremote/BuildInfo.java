@@ -1,6 +1,6 @@
 package com.boris.tvremote;
 
 final class BuildInfo {
-    static final String VERSION = "1.7";
+    static final String VERSION = "1.8";
     private BuildInfo() { }
 }
