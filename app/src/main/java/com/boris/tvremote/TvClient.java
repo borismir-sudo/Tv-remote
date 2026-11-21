@@ -436,7 +436,7 @@ public class TvClient {
     }
 
     static final int PACED_STEP = 8;       // small, equal steps …
-    static final int PACED_PAUSE_MS = 4;   // … at an even pace, so the TV adds no acceleration
+    static final int PACED_PAUSE_MS = 3;   // … at an even pace, so the TV adds no acceleration
 
     private static void sleepQuiet(long ms) {
         try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
@@ -472,8 +472,8 @@ public class TvClient {
     }
 
     /** Absolute pointing: park in the corner, then glide (ux, uy) units from it; optionally click there. */
-    public void pointTo(int ux, int uy, boolean click) {
-        ptr.execute(() -> {
+    public java.util.concurrent.Future<?> pointTo(int ux, int uy, boolean click) {
+        return ptr.submit(() -> {
             synchronized (moveLock) { moveDx = 0; moveDy = 0; }
             parkNow();
             movePacedNow(Math.max(0, ux), Math.max(0, uy));
@@ -483,6 +483,12 @@ public class TvClient {
             }
         });
     }
+
+    /** Relative glide with even steps (used to correct the pointer after measuring it). */
+    public java.util.concurrent.Future<?> nudge(int dx, int dy) {
+        return ptr.submit(() -> movePacedNow(dx, dy));
+    }
+
     private final Object moveLock = new Object();
     private int moveDx, moveDy;
     private boolean moveQueued;

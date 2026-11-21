@@ -138,7 +138,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         @Override public void run() {
             if (!resumed) return;
             boolean touching = SystemClock.uptimeMillis() - lastTouchAt < 3000;
-            if (connected && previewOn() && pad != null && pad.getVisibility() == View.VISIBLE && !shotInFlight) {
+            if (connected && previewOn() && pad != null && pad.getVisibility() == View.VISIBLE && !shotInFlight && !aiming) {
                 shotInFlight = true;
                 tv.requestScreenshot(jpeg -> ui.post(() -> { shotInFlight = false; showShot(jpeg); }));
             }
@@ -292,7 +292,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
                 margins(size(56, 44), 8, 0, 0, 0));
         bar.addView(key(R.drawable.ic_home, null, C_KEY, C_TEXT, 22, 20, L.s("Домой", "Home"), v -> tv.button("HOME")),
                 margins(size(56, 44), 8, 0, 0, 0));
-        TextView cal = segItem("🎯", v -> startCalibration());
+        TextView cal = segItem("🎯", v -> autoCalibrate());
         cal.setBackground(round(C_KEY, 20));
         cal.setContentDescription(L.s("Калибровка курсора", "Calibrate cursor"));
         bar.addView(cal, margins(size(48, 44), 8, 0, 0, 0));
@@ -527,6 +527,142 @@ public class MainActivity extends Activity implements TvClient.Listener {
         flash(L.s("Готово ✓ Теперь касайтесь картинки — курсор пойдёт туда", "Done ✓ Now tap the picture — the cursor goes there"));
     }
 
+    // ---------------- closed-loop aiming: move, look at a screenshot, find the pointer, correct ----------------
+
+    private volatile boolean aiming;
+    private volatile Boolean pointerInShots;   // null = not known yet
+    private int findMisses;
+    private final ArrayList<float[]> samples = new ArrayList<>();   // {ux, uy, px, py} measured from the corner
+
+    /** Blocking screenshot → luminance grid, or null. Must not run on the UI thread. */
+    private int[] grabGrid() {
+        final java.util.concurrent.CompletableFuture<byte[]> f = new java.util.concurrent.CompletableFuture<>();
+        tv.requestScreenshot(f::complete);
+        byte[] jpeg;
+        try { jpeg = f.get(6, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception e) { return null; }
+        if (jpeg == null) return null;
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inSampleSize = 2;
+        android.graphics.Bitmap b = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length, o);
+        if (b == null || isBlack(b)) return null;
+        ui.post(() -> { if (preview != null) preview.setBitmap(b); });
+        android.graphics.Bitmap s = android.graphics.Bitmap.createScaledBitmap(b, CursorFinder.GW, CursorFinder.GH, true);
+        int[] px = new int[CursorFinder.GW * CursorFinder.GH];
+        s.getPixels(px, 0, CursorFinder.GW, 0, 0, CursorFinder.GW, CursorFinder.GH);
+        return CursorFinder.luminance(px);
+    }
+
+    private static void sleepQ(long ms) { try { Thread.sleep(ms); } catch (InterruptedException ignored) { } }
+
+    private void addSample(int ux, int uy, float px, float py) {
+        samples.add(new float[]{ux, uy, px, py});
+        while (samples.size() > 12) samples.remove(0);
+        int n = samples.size();
+        float[] u1 = new float[n], p1 = new float[n], u2 = new float[n], p2 = new float[n];
+        for (int i = 0; i < n; i++) { float[] s = samples.get(i); u1[i] = s[0]; u2[i] = s[1]; p1[i] = s[2]; p2[i] = s[3]; }
+        float[] fx = CursorFinder.fit(u1, p1, n), fy = CursorFinder.fit(u2, p2, n);
+        SharedPreferences.Editor e = prefs.edit();
+        if (fx != null) e.putFloat("p2kx", fx[0]).putFloat("p2ox", fx[1]);
+        else e.putFloat("p2ox", px - kx() * ux);          // one sample: correct the offset only
+        if (fy != null) e.putFloat("p2ky", fy[0]).putFloat("p2oy", fy[1]);
+        else e.putFloat("p2oy", py - ky() * uy);
+        e.apply();
+        ui.post(() -> log(String.format(java.util.Locale.US, "замер курсора: %.0f,%.0f → kx=%.3f ky=%.3f", px, py, kx(), ky())));
+    }
+
+    /** Point at (tx, ty) of the picture; with the TV picture on, measure the real pointer and correct it. */
+    private void aimAt(float tx, float ty, boolean click) {
+        if (aiming) return;
+        flash(click ? L.s("Клик сюда…", "Click here…") : L.s("Курсор сюда…", "Cursor here…"));
+        if (!previewOn() || Boolean.FALSE.equals(pointerInShots)) { pointAt(tx, ty, click); return; }
+        aiming = true;
+        new Thread(() -> {
+            try {
+                int ux = unitsX(tx), uy = unitsY(ty);
+                int[] before = grabGrid();
+                tv.pointTo(ux, uy, false).get(15, java.util.concurrent.TimeUnit.SECONDS);
+                sleepQ(300);
+                int[] after = grabGrid();
+                float[] p = CursorFinder.find(before, after, tx, ty, 500);
+                if (p == null) {
+                    if (++findMisses >= 2 && before != null && after != null) {
+                        pointerInShots = false;
+                        ui.post(() -> {
+                            log(L.s("курсор LG не виден на снимках экрана — точная доводка невозможна",
+                                    "LG pointer is not visible in screenshots — exact correction impossible"));
+                            toast(L.s("Телевизор не показывает курсор на снимках — наводка будет примерной",
+                                    "The TV hides the pointer in screenshots — aiming will be approximate"));
+                        });
+                    }
+                } else {
+                    pointerInShots = true;
+                    findMisses = 0;
+                    addSample(ux, uy, p[0], p[1]);
+                    int[] last = after;
+                    for (int it = 0; it < 2; it++) {
+                        float ex = tx - p[0], ey = ty - p[1];
+                        if (Math.hypot(ex, ey) < 14) break;
+                        tv.nudge(Math.round(ex / kx()), Math.round(ey / ky())).get(10, java.util.concurrent.TimeUnit.SECONDS);
+                        sleepQ(300);
+                        int[] g = grabGrid();
+                        float[] q = CursorFinder.find(last, g, tx, ty, 250);
+                        if (q == null) break;
+                        p = q;
+                        last = g;
+                    }
+                    final float fx = p[0], fy = p[1];
+                    ui.post(() -> { curX = fx; curY = fy; if (preview != null) preview.setCursor(fx, fy, true); });
+                }
+                if (click) tv.click();
+            } catch (Exception e) {
+                ui.post(() -> log("aim: " + e));
+            } finally {
+                aiming = false;
+            }
+        }).start();
+        curX = tx;
+        curY = ty;
+        if (preview != null) preview.setCursor(tx, ty, true);
+    }
+
+    /** 🎯: measure the pointer at three spots automatically; if the TV hides it, fall back to tap calibration. */
+    private void autoCalibrate() {
+        if (aiming || preview == null) return;
+        if (!previewOn() || Boolean.FALSE.equals(pointerInShots)) { startCalibration(); return; }
+        aiming = true;
+        flash(L.s("Калибрую сам, не трогайте 5–10 секунд…", "Calibrating, hands off for 5–10 s…"));
+        new Thread(() -> {
+            int found = 0;
+            try {
+                int[][] pts = {{300, 200}, {1100, 650}, {700, 400}};
+                int[] prev = grabGrid();
+                for (int[] u : pts) {
+                    tv.pointTo(u[0], u[1], false).get(15, java.util.concurrent.TimeUnit.SECONDS);
+                    sleepQ(300);
+                    int[] g = grabGrid();
+                    float ex = ox() + kx() * u[0], ey = oy() + ky() * u[1];
+                    float[] p = CursorFinder.find(prev, g, ex, ey, 900);
+                    if (p != null) { addSample(u[0], u[1], p[0], p[1]); found++; }
+                    prev = g;
+                }
+            } catch (Exception e) {
+                ui.post(() -> log("calib: " + e));
+            } finally {
+                aiming = false;
+            }
+            final int f = found;
+            ui.post(() -> {
+                if (f >= 2) {
+                    pointerInShots = true;
+                    flash(L.s("Готово ✓ курсор откалиброван автоматически", "Done ✓ pointer calibrated automatically"));
+                } else {
+                    toast(L.s("Не нашёл курсор на снимках — откалибруйте касаниями", "Couldn't see the pointer — calibrate by tapping"));
+                    startCalibration();
+                }
+            });
+        }).start();
+    }
+
     /** Taps on the TV picture: calibration, or point (single tap) / point + click (double tap). */
     private void attachPreviewGestures() {
         final android.view.GestureDetector gd = new android.view.GestureDetector(this, new android.view.GestureDetector.SimpleOnGestureListener() {
@@ -543,8 +679,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
                 float[] t = preview.toTv(e.getX(), e.getY());
                 if (t == null) return true;
                 haptic(preview);
-                pointAt(t[0], t[1], false);
-                flash(L.s("Курсор сюда", "Cursor here"));
+                aimAt(t[0], t[1], false);
                 return true;
             }
             @Override public boolean onDoubleTap(MotionEvent e) {
@@ -552,8 +687,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
                 float[] t = preview.toTv(e.getX(), e.getY());
                 if (t == null) return true;
                 haptic(preview);
-                pointAt(t[0], t[1], true);
-                flash(L.s("Клик сюда", "Click here"));
+                aimAt(t[0], t[1], true);
                 return true;
             }
         });
