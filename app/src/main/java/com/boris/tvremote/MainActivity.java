@@ -454,7 +454,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         pad.setVisibility(mouse ? View.VISIBLE : View.GONE);
         styleSeg(segButtons, !mouse);
         styleSeg(segMouse, mouse);
-        if (mouse && !ip().isEmpty()) tv.prepareInput();
+        if (mouse && !ip().isEmpty()) { tv.prepareInput(); tv.resetScreenshot(); }
     }
 
     private void setLang(String l) {

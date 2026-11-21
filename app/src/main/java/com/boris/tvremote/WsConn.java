@@ -77,6 +77,9 @@ public class WsConn {
         }
     }
 
+    /** TLS context that accepts the TV's self-signed certificate (used only for the TV's own IP). */
+    static SSLContext tvTls() throws IOException { return trustAll(); }
+
     private static SSLContext trustAll() throws IOException {
         try {
             TrustManager[] tm = new TrustManager[]{new X509TrustManager() {

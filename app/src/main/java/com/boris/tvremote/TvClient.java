@@ -311,38 +311,98 @@ public class TvClient {
 
     private volatile boolean shotUnsupported;
     private int shotFailures;
+    private int shotVariant = -1;          // which request form worked last
+    private final java.util.Set<String> shotLogged = new java.util.HashSet<>();
 
-    /** Grab a still of the TV picture (works for live TV / menus; DRM apps usually give black or refuse). */
+    /** Request forms seen on different webOS versions. */
+    @SuppressWarnings("unchecked")
+    private static final Object[][] SHOT_VARIANTS = {
+            {"tv/executeOneShot", Json.map("path", "/tmp/boris_remote.jpg", "method", "DISPLAY", "format", "JPG")},
+            {"tv/executeOneShot", Json.map("path", "/tmp/boris_remote.jpg", "method", "SCREEN", "format", "JPG", "width", 960, "height", 540)},
+            {"tv/executeOneShot", null},
+            {"com.webos.service.tv.capture/executeOneShot", Json.map("path", "/tmp/boris_remote.jpg", "method", "DISPLAY", "format", "JPG")},
+            {"com.webos.service.capture/executeOneShot", Json.map("path", "/tmp/boris_remote.jpg", "method", "DISPLAY", "format", "JPG")},
+    };
+
+    private void logOnce(String key, String msg) {
+        if (shotLogged.add(key)) listener.onLog(msg);
+    }
+
+    /** Grab a still of the TV picture. Tries every known request form and both ports. */
+    @SuppressWarnings("unchecked")
     public void requestScreenshot(ShotCallback cb) {
         exec.execute(() -> {
             if (!isConnected() || shotUnsupported) { cb.onShot(null); return; }
+            int start = shotVariant >= 0 ? shotVariant : 0;
+            for (int k = 0; k < SHOT_VARIANTS.length; k++) {
+                int v = (start + k) % SHOT_VARIANTS.length;
+                if (shotVariant >= 0 && v != shotVariant) break;   // known-good form: don't retry others every time
+                String uri = (String) SHOT_VARIANTS[v][0];
+                Map<String, Object> payload = (Map<String, Object>) SHOT_VARIANTS[v][1];
+                String imageUri;
+                try {
+                    Map<String, Object> r = request(uri, payload, true);
+                    imageUri = r == null ? null : Json.str(r.get("imageUri"));
+                    if (imageUri == null) { logOnce("noimg" + v, "📷 " + uri + " → " + L.s("нет ссылки на картинку", "no image link")); continue; }
+                } catch (Exception e) {
+                    logOnce("err" + v, "📷 " + uri + " → " + e.getMessage());
+                    continue;
+                }
+                byte[] img = fetchImage(imageUri);
+                if (img != null) {
+                    if (shotVariant != v) listener.onLog("📷 " + L.s("снимок экрана работает", "screenshot works") + " (" + uri + ")");
+                    shotVariant = v;
+                    shotFailures = 0;
+                    cb.onShot(img);
+                    return;
+                }
+            }
+            if (++shotFailures >= 3) {
+                shotUnsupported = true;
+                listener.onLog("📷 " + L.s("снимок экрана ТВ недоступен — телевизор отказывает (подробности выше)",
+                        "TV screenshot unavailable — the TV refuses (details above)"));
+            }
+            cb.onShot(null);
+        });
+    }
+
+    /** Download the capture; newer firmware closes plain port 3000, so also try the TLS port 3001. */
+    private byte[] fetchImage(String imageUri) {
+        List<String> urls = new ArrayList<>();
+        String u = imageUri.startsWith("http") ? imageUri : "http://" + ip + ":" + wsPort + (imageUri.startsWith("/") ? "" : "/") + imageUri;
+        urls.add(u);
+        int slash = u.indexOf('/', u.indexOf("//") + 2);
+        String rest = slash > 0 ? u.substring(slash) : "/";
+        urls.add("https://" + ip + ":" + wssPort + rest);
+        urls.add("http://" + ip + ":" + wsPort + rest);
+        for (String url : urls) {
             try {
-                Map<String, Object> r = request("tv/executeOneShot",
-                        Json.map("path", "/tmp/boris_remote.jpg", "method", "DISPLAY", "format", "JPG"), true);
-                String uri = r == null ? null : Json.str(r.get("imageUri"));
-                if (uri == null) { cb.onShot(null); return; }
-                java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(uri).openConnection();
+                java.net.HttpURLConnection c = (java.net.HttpURLConnection) java.net.URI.create(url).toURL().openConnection();
+                if (c instanceof javax.net.ssl.HttpsURLConnection) {
+                    javax.net.ssl.HttpsURLConnection h = (javax.net.ssl.HttpsURLConnection) c;
+                    h.setSSLSocketFactory(WsConn.tvTls().getSocketFactory());
+                    h.setHostnameVerifier((host, session) -> host.equals(ip));   // only the TV's own address
+                }
                 c.setConnectTimeout(2500);
-                c.setReadTimeout(2500);
+                c.setReadTimeout(3000);
                 try (java.io.InputStream in = c.getInputStream()) {
                     java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
                     byte[] buf = new byte[16384];
                     int n;
                     while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
-                    shotFailures = 0;
-                    cb.onShot(bo.toByteArray());
+                    if (bo.size() > 0) return bo.toByteArray();
                 } finally {
                     c.disconnect();
                 }
             } catch (Exception e) {
-                if (++shotFailures >= 3) {
-                    shotUnsupported = true;
-                    listener.onLog(L.s("снимок экрана ТВ недоступен: ", "TV screenshot unavailable: ") + e.getMessage());
-                }
-                cb.onShot(null);
+                logOnce("dl" + url, "📷 " + L.s("не скачать ", "can't download ") + url + " → " + e.getMessage());
             }
-        });
+        }
+        return null;
     }
+
+    /** Allow another attempt after the user changes what's on screen. */
+    public void resetScreenshot() { exec.execute(() -> { shotUnsupported = false; shotFailures = 0; }); }
 
     /** Move the TV's on-screen pointer (Magic Remote style). */
     public void move(int dx, int dy) { pointer("type:move\ndx:" + dx + "\ndy:" + dy + "\ndown:0\n\n"); }
