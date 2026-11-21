@@ -72,7 +72,8 @@ public class MainActivity extends Activity implements TvClient.Listener {
     private View padDot;
     private TextView flashView;
     private TvPreview preview;
-    private View playRow;
+    private View playRow, headerRow, navRow, segRowView, rockerRow, appsRow, focusBar;
+    private TextView eyeSeg, eyeFocus;
     private boolean shotInFlight;
     private long lastTouchAt;
     private float curX = TvPreview.TV_W / 2, curY = TvPreview.TV_H / 2;
@@ -249,6 +250,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         power.setOnLongClickListener(v -> { haptic(v); powerOn(); return true; });
         header.addView(power, margins(size(52, 52), 8, 0, 0, 0));
         root.addView(header, new LinearLayout.LayoutParams(-1, dp(56)));
+        headerRow = header;
 
         // --- back · home · mute · menu · keyboard
         LinearLayout nav = row();
@@ -258,6 +260,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         nav.addView(key(R.drawable.ic_menu, null, C_KEY, C_TEXT, 26, 22, L.s("Меню телевизора", "TV menu"), v -> tv.button("MENU")), weightLp(8));
         nav.addView(key(R.drawable.ic_kbd, null, C_KEY, C_TEXT, 26, 22, L.s("Клавиатура", "Keyboard"), v -> showKeyboard()), weightLp(8));
         root.addView(nav, margins(new LinearLayout.LayoutParams(-1, dp(52)), 0, 10, 0, 0));
+        navRow = nav;
 
         // --- segmented: Кнопки | Мышь
         LinearLayout seg = row();
@@ -270,7 +273,28 @@ public class MainActivity extends Activity implements TvClient.Listener {
         LinearLayout segRow = row();
         segRow.setGravity(Gravity.CENTER);
         segRow.addView(seg);
+        eyeSeg = eyeToggle();
+        segRow.addView(eyeSeg, margins(new LinearLayout.LayoutParams(-2, dp(44)), 10, 0, 0, 0));
         root.addView(segRow, margins(new LinearLayout.LayoutParams(-1, -2), 0, 14, 0, 0));
+        segRowView = segRow;
+
+        // --- compact bar shown only in "mouse + TV screen" focus mode
+        LinearLayout bar = row();
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        TextView exit = segItem("◀  " + L.s("Кнопки", "Buttons"), v -> setMode("buttons"));
+        exit.setBackground(round(C_KEY, 20));
+        exit.setPadding(dp(14), 0, dp(14), 0);
+        bar.addView(exit, new LinearLayout.LayoutParams(-2, dp(44)));
+        bar.addView(key(R.drawable.ic_back, null, C_KEY, C_TEXT, 22, 20, L.s("Назад", "Back"), v -> tv.button("BACK")),
+                margins(size(56, 44), 8, 0, 0, 0));
+        bar.addView(key(R.drawable.ic_home, null, C_KEY, C_TEXT, 22, 20, L.s("Домой", "Home"), v -> tv.button("HOME")),
+                margins(size(56, 44), 8, 0, 0, 0));
+        bar.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        eyeFocus = eyeToggle();
+        bar.addView(eyeFocus, new LinearLayout.LayoutParams(-2, dp(44)));
+        bar.setVisibility(View.GONE);
+        root.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+        focusBar = bar;
 
         // --- center (fills the free space): d-pad or touchpad; the log overlays it
         FrameLayout center = new FrameLayout(this);
@@ -329,6 +353,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         rockers.addView(rocker("CH", R.drawable.ic_up, R.drawable.ic_down, L.s("Канал вверх", "Channel up"), L.s("Канал вниз", "Channel down"),
                 () -> tv.channelUp(), () -> tv.channelDown(), false), new LinearLayout.LayoutParams(dp(72), -2));
         root.addView(rockers, new LinearLayout.LayoutParams(-1, -2));
+        rockerRow = rockers;
         setLang(lang());
 
         // --- playback
@@ -346,6 +371,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
         apps.addView(appKey("HDMI", false, v -> showInputs()), weightLp(8));
         apps.addView(appKey("123", false, v -> showKeypad()), weightLp(8));
         root.addView(apps, margins(new LinearLayout.LayoutParams(-1, dp(46)), 0, 10, 0, 0));
+        appsRow = apps;
         return root;
     }
 
@@ -392,7 +418,35 @@ public class MainActivity extends Activity implements TvClient.Listener {
 
     private void applyPreviewSetting() {
         if (preview != null) preview.setVisibility(previewOn() ? View.VISIBLE : View.GONE);
-        if (playRow != null && pad != null) playRow.setVisibility(pad.getVisibility() == View.VISIBLE && previewOn() ? View.GONE : View.VISIBLE);
+        applyLayout();
+    }
+
+    /** Mouse + TV screen = focus mode: only the compact bar, the TV picture and the touchpad. */
+    private void applyLayout() {
+        boolean mouse = "mouse".equals(prefs.getString("mode", "buttons"));
+        boolean focus = mouse && previewOn();
+        int normal = focus ? View.GONE : View.VISIBLE;
+        for (View v : new View[]{headerRow, navRow, segRowView, rockerRow, appsRow, playRow}) {
+            if (v != null) v.setVisibility(normal);
+        }
+        if (focusBar != null) focusBar.setVisibility(focus ? View.VISIBLE : View.GONE);
+        if (eyeSeg != null) eyeSeg.setVisibility(mouse && !focus ? View.VISIBLE : View.GONE);
+        for (TextView e : new TextView[]{eyeSeg, eyeFocus}) {
+            if (e != null) e.setText(previewOn() ? L.s("👁 Экран ТВ: вкл", "👁 TV screen: on") : L.s("👁 Экран ТВ: выкл", "👁 TV screen: off"));
+        }
+    }
+
+    private TextView eyeToggle() {
+        TextView t = segItem("", v -> {
+            boolean on = !previewOn();
+            prefs.edit().putBoolean("preview", on).apply();
+            applyPreviewSetting();
+            if (on && "mouse".equals(prefs.getString("mode", ""))) { tv.resetScreenshot(); syncCursor(); }
+        });
+        t.setBackground(round(C_KEY, 20));
+        t.setPadding(dp(14), 0, dp(14), 0);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        return t;
     }
 
     /** Park the TV pointer in the top-left corner (it stops at the edge), then bring it to the centre, so the drawn cursor matches. */
@@ -504,9 +558,9 @@ public class MainActivity extends Activity implements TvClient.Listener {
         prefs.edit().putString("mode", mouse ? "mouse" : "buttons").apply();
         dpad.setVisibility(mouse ? View.GONE : View.VISIBLE);
         pad.setVisibility(mouse ? View.VISIBLE : View.GONE);
-        if (playRow != null) playRow.setVisibility(mouse && previewOn() ? View.GONE : View.VISIBLE);
         styleSeg(segButtons, !mouse);
         styleSeg(segMouse, mouse);
+        applyLayout();
         if (mouse && !ip().isEmpty()) {
             tv.prepareInput();
             tv.resetScreenshot();

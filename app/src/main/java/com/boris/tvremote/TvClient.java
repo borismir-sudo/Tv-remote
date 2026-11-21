@@ -34,7 +34,11 @@ public class TvClient {
     int wsPort = 3000;
 
     private final Listener listener;
-    private final ExecutorService exec = Executors.newSingleThreadExecutor();
+    private final ExecutorService exec = Executors.newSingleThreadExecutor();      // buttons & commands
+    private final ExecutorService ptr = Executors.newSingleThreadExecutor();       // mouse moves — never waits for anything slow
+    private final ExecutorService slow = Executors.newSingleThreadExecutor();      // screenshots & status polling
+    private final Object connectLock = new Object();
+    private final Object inputLock = new Object();
     private final AtomicInteger seq = new AtomicInteger(1);
     private final Map<String, BlockingQueue<Map<String, Object>>> pending = new ConcurrentHashMap<>();
     private final BlockingQueue<Map<String, Object>> regQueue = new ArrayBlockingQueue<>(8);
@@ -66,6 +70,8 @@ public class TvClient {
     public void shutdown() {
         exec.execute(this::dropConnections);
         exec.shutdown();
+        ptr.shutdownNow();
+        slow.shutdownNow();
     }
 
     // ---------------- commands ----------------
@@ -142,6 +148,14 @@ public class TvClient {
     private void ensureMain() throws Exception {
         WsConn m = main;
         if (m != null && m.isOpen()) return;
+        synchronized (connectLock) {
+            m = main;
+            if (m != null && m.isOpen()) return;
+            connectNow();
+        }
+    }
+
+    private void connectNow() throws Exception {
         if (ip == null || ip.isEmpty()) throw new IOException(L.s("Не задан IP телевизора (⚙)", "TV IP not set (⚙)"));
         listener.onStatus(L.s("Подключаюсь к ", "Connecting to ") + ip + "…", false);
         dropConnections();
@@ -249,14 +263,18 @@ public class TvClient {
 
     private WsConn ensureInput() throws Exception {
         WsConn in = input;
-        if (in == null || !in.isOpen()) {
+        if (in != null && in.isOpen()) return in;
+        synchronized (inputLock) {
+          in = input;
+          if (in == null || !in.isOpen()) {
             Map<String, Object> r = request("com.webos.service.networkinput/getPointerInputSocket", null);
             String path = r == null ? null : Json.str(r.get("socketPath"));
             if (path == null) throw new IOException(L.s("Нет сокета кнопок", "No key socket"));
             in = openInput(path);
             input = in;
+          }
+          return in;
         }
-        return in;
     }
 
     private void sendInput(String msg) throws Exception {
@@ -265,21 +283,21 @@ public class TvClient {
 
     /** Open the pointer/key socket ahead of time so the touchpad reacts instantly. */
     public void prepareInput() {
-        exec.execute(() -> { try { ensureInput(); } catch (Exception e) { listener.onLog(L.s("сокет мыши: ", "mouse socket: ") + e.getMessage()); } });
+        ptr.execute(() -> { try { ensureInput(); } catch (Exception e) { listener.onLog(L.s("сокет мыши: ", "mouse socket: ") + e.getMessage()); } });
     }
 
     private volatile long lastPointerError;
 
-    private void pointer(String msg) {
-        exec.execute(() -> {
-            try {
-                sendInput(msg);
-            } catch (Exception e) {
-                closeInput();
-                long now = System.currentTimeMillis();
-                if (now - lastPointerError > 3000) { lastPointerError = now; fail(e); }
-            }
-        });
+    private void pointer(String msg) { ptr.execute(() -> pointerNow(msg)); }
+
+    private void pointerNow(String msg) {
+        try {
+            sendInput(msg);
+        } catch (Exception e) {
+            closeInput();
+            long now = System.currentTimeMillis();
+            if (now - lastPointerError > 3000) { lastPointerError = now; fail(e); }
+        }
     }
 
     public interface InfoCallback { void onInfo(String appId, Integer volume, Boolean muted); }
@@ -287,7 +305,7 @@ public class TvClient {
 
     /** What is on the TV now (foreground app, volume). Only while connected; never triggers a reconnect. */
     public void requestInfo(InfoCallback cb) {
-        exec.execute(() -> {
+        slow.execute(() -> {
             if (!isConnected()) return;
             String app = null; Integer vol = null; Boolean mute = null;
             try {
@@ -331,7 +349,7 @@ public class TvClient {
     /** Grab a still of the TV picture. Tries every known request form and both ports. */
     @SuppressWarnings("unchecked")
     public void requestScreenshot(ShotCallback cb) {
-        exec.execute(() -> {
+        slow.execute(() -> {
             if (!isConnected() || shotUnsupported) { cb.onShot(null); return; }
             int start = shotVariant >= 0 ? shotVariant : 0;
             for (int k = 0; k < SHOT_VARIANTS.length; k++) {
@@ -402,10 +420,27 @@ public class TvClient {
     }
 
     /** Allow another attempt after the user changes what's on screen. */
-    public void resetScreenshot() { exec.execute(() -> { shotUnsupported = false; shotFailures = 0; }); }
+    public void resetScreenshot() { slow.execute(() -> { shotUnsupported = false; shotFailures = 0; }); }
 
-    /** Move the TV's on-screen pointer (Magic Remote style). */
-    public void move(int dx, int dy) { pointer("type:move\ndx:" + dx + "\ndy:" + dy + "\ndown:0\n\n"); }
+    private final Object moveLock = new Object();
+    private int moveDx, moveDy;
+    private boolean moveQueued;
+
+    /** Move the TV's on-screen pointer. Moves that pile up while the network is busy are merged into one. */
+    public void move(int dx, int dy) {
+        synchronized (moveLock) {
+            moveDx += dx;
+            moveDy += dy;
+            if (moveQueued) return;
+            moveQueued = true;
+        }
+        ptr.execute(() -> {
+            int x, y;
+            synchronized (moveLock) { x = moveDx; y = moveDy; moveDx = 0; moveDy = 0; moveQueued = false; }
+            if (x != 0 || y != 0) pointerNow("type:move\ndx:" + x + "\ndy:" + y + "\ndown:0\n\n");
+        });
+    }
+
     public void click() { pointer("type:click\n\n"); listener.onLog(L.s("клик мышью", "mouse click")); }
     public void scroll(int dx, int dy) { pointer("type:scroll\ndx:" + dx + "\ndy:" + dy + "\n\n"); }
 
