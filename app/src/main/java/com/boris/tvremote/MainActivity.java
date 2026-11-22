@@ -451,15 +451,24 @@ public class MainActivity extends Activity implements TvClient.Listener {
     }
 
     private void applyPreviewSetting() {
-        if (preview != null) preview.setVisibility(previewOn() ? View.VISIBLE : View.GONE);
-        if (previewTip != null) previewTip.setVisibility(previewOn() ? View.VISIBLE : View.GONE);
+        // The picture area always keeps its place, so the touchpad below has the same size and position
+        // whether the TV screen is shown or not.
+        if (preview != null) {
+            preview.setVisibility(View.VISIBLE);
+            if (!previewOn()) {
+                preview.setBitmap(null);
+                preview.setCursor(0, 0, false);
+                preview.setMessage(L.s("Экран ТВ выключен · 👁 — включить", "TV screen off · 👁 — turn on"));
+            }
+        }
+        if (previewTip != null) previewTip.setVisibility(previewOn() ? View.VISIBLE : View.INVISIBLE);
         applyLayout();
     }
 
     /** Mouse + TV screen = focus mode: only the compact bar, the TV picture and the touchpad. */
     private void applyLayout() {
         boolean mouse = "mouse".equals(prefs.getString("mode", "buttons"));
-        boolean focus = mouse && previewOn();
+        boolean focus = mouse;   // mouse mode always: compact bar, picture area, touchpad at the bottom
         int normal = focus ? View.GONE : View.VISIBLE;
         for (View v : new View[]{headerRow, navRow, segRowView, rockerRow, appsRow, playRow}) {
             if (v != null) v.setVisibility(normal);
@@ -1040,8 +1049,8 @@ public class MainActivity extends Activity implements TvClient.Listener {
         if (currentApp.contains("browser")) {
             // In the web browser arrows only walk link to link; scroll the page itself instead.
             switch (k) {
-                case "UP": tv.scroll(0, -SCROLL_STEP); return;
-                case "DOWN": tv.scroll(0, SCROLL_STEP); return;
+                case "UP": tv.scroll(0, SCROLL_STEP); return;      // LG's scroll sign is opposite to the screen
+                case "DOWN": tv.scroll(0, -SCROLL_STEP); return;
                 case "LEFT": tv.scroll(-SCROLL_STEP, 0); return;
                 default: tv.scroll(SCROLL_STEP, 0); return;
             }
