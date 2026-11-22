@@ -23,7 +23,12 @@ public class TvClient {
         void onMac(String mac);
         void onError(String text);
         void onLog(String text);
+        /** The TV's on-screen keyboard opened (a text field got focus) or closed. */
+        default void onTvKeyboard(boolean open) { }
     }
+
+    private volatile boolean tvKeyboardOpen;
+    public boolean isTvKeyboardOpen() { return tvKeyboardOpen; }
 
     static final int CONNECT_TIMEOUT_MS = 4000;
     static final int PAIR_TIMEOUT_MS = 60000;
@@ -138,11 +143,18 @@ public class TvClient {
                 request("com.webos.service.ime/insertText", Json.map("text", text, "replace", Boolean.FALSE));
                 if (enter) request("com.webos.service.ime/sendEnterKey", null);
             } catch (Exception e) {
-                listener.onLog(L.s("ввод текста не прошёл (", "text input failed (") + e.getMessage() + L.s(") → ищу в YouTube", ") → searching YouTube"));
-                youtubeSearch(text);
+                fail(new IOException(L.s("На телевизоре не открыто поле ввода — нажмите на строку поиска на ТВ",
+                        "No text field is open on the TV — select the search box on the TV")));
             }
         });
     }
+
+    /** Replace the whole text of the focused TV field (live typing from the phone). */
+    public void setFieldText(String text) {
+        ssap("com.webos.service.ime/insertText", Json.map("text", text, "replace", Boolean.TRUE));
+    }
+
+    public void enterKey() { ssap("com.webos.service.ime/sendEnterKey"); }
 
     public void deleteChars(int count) {
         ssap("com.webos.service.ime/deleteCharacters", Json.map("count", count));
@@ -170,6 +182,11 @@ public class TvClient {
         main = c;
         register(c);
         listener.onStatus(L.s("Подключено: ", "Connected: ") + ip, true);
+        // Be told whenever a text field on the TV gets focus (so the phone keyboard can pop up).
+        try {
+            c.sendText(Json.stringify(Json.map("type", "subscribe", "id", "kbd_sub",
+                    "uri", "ssap://com.webos.service.ime/registerRemoteKeyboard")));
+        } catch (Exception ignored) { }
         // Learn the MAC for Wake-on-LAN (best effort).
         try {
             Map<String, Object> info = request("com.webos.service.connectionmanager/getinfo", null);
@@ -198,6 +215,15 @@ public class TvClient {
             if (msg == null) return;
             String id = String.valueOf(msg.get("id"));
             if (id.startsWith("register")) { regQueue.offer(msg); return; }
+            if (id.startsWith("kbd_sub")) {
+                Map<String, Object> p = Json.obj(msg.get("payload"));
+                Map<String, Object> w = p == null ? null : Json.obj(p.get("currentWidget"));
+                if (w != null) {
+                    boolean open = Boolean.TRUE.equals(w.get("focus"));
+                    if (open != tvKeyboardOpen) { tvKeyboardOpen = open; listener.onTvKeyboard(open); }
+                }
+                return;
+            }
             BlockingQueue<Map<String, Object>> q = pending.get(id);
             if (q != null) q.offer(msg);
         }

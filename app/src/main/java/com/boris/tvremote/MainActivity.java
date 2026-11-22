@@ -199,6 +199,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
     }
 
     private void showInfo(String app, Integer vol, Boolean mute) {
+        currentApp = app == null ? "" : app;
         StringBuilder b = new StringBuilder();
         String name = appName(app);
         if (name != null) b.append(" · ").append(name);
@@ -1026,13 +1027,25 @@ public class MainActivity extends Activity implements TvClient.Listener {
     }
 
     private long lastPointerAt;
+    private static final int SCROLL_STEP = 6;
 
     /**
      * Arrow that acts the moment it is touched and keeps going while held.
      * When the TV pointer was just used, LG spends the first arrow press only on leaving pointer mode,
      * so in that case one extra press is sent first.
      */
+    private volatile String currentApp = "";
+
     private void arrowNow(String k) {
+        if (currentApp.contains("browser")) {
+            // In the web browser arrows only walk link to link; scroll the page itself instead.
+            switch (k) {
+                case "UP": tv.scroll(0, -SCROLL_STEP); return;
+                case "DOWN": tv.scroll(0, SCROLL_STEP); return;
+                case "LEFT": tv.scroll(-SCROLL_STEP, 0); return;
+                default: tv.scroll(SCROLL_STEP, 0); return;
+            }
+        }
         if (SystemClock.uptimeMillis() - lastPointerAt < 15000) {
             tv.button(k);
             lastPointerAt = 0;
@@ -1042,7 +1055,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
 
     private void holdArrow(View v, String k) {
         final Runnable[] rep = new Runnable[1];
-        rep[0] = () -> { tv.button(k); ui.postDelayed(rep[0], 110); };
+        rep[0] = () -> { if (currentApp.contains("browser")) arrowNow(k); else tv.button(k); ui.postDelayed(rep[0], 110); };
         v.setOnTouchListener((x, e) -> {
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
@@ -1233,39 +1246,71 @@ public class MainActivity extends Activity implements TvClient.Listener {
         new AlertDialog.Builder(this).setTitle(L.s("Номер канала", "Channel number")).setView(box).setPositiveButton(L.s("Закрыть", "Close"), null).show();
     }
 
-    private void showKeyboard() {
+    private AlertDialog kbdDialog;
+
+    private void showKeyboard() { showKeyboard(null); }
+
+    /** Phone keyboard for the TV. When a TV text field is focused, every letter appears on the TV as you type. */
+    private void showKeyboard(String prefill) {
+        if (kbdDialog != null && kbdDialog.isShowing()) return;
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(16), dp(8), dp(16), 0);
-        TextView info = new TextView(this);
-        info.setText(L.s("Откройте поиск на телевизоре, затем пишите здесь.", "Open search on the TV, then type here."));
+        final TextView info = new TextView(this);
         info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         box.addView(info);
         final EditText field = new EditText(this);
         field.setHint(L.s("Текст…", "Text…"));
         field.setSingleLine(true);
-        field.setInputType(InputType.TYPE_CLASS_TEXT);
+        field.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         field.setImeOptions(EditorInfo.IME_ACTION_SEND);
         box.addView(field);
+        final Runnable[] push = new Runnable[1];
+        push[0] = () -> { if (tv.isTvKeyboardOpen()) tv.setFieldText(field.getText().toString()); };
+        Runnable status = () -> info.setText(tv.isTvKeyboardOpen()
+                ? L.s("✓ Поле на ТВ открыто — текст появляется там сразу", "✓ TV field is open — text appears there live")
+                : L.s("Выберите строку поиска на ТВ (мышью или стрелками), потом пишите здесь", "Select the search box on the TV, then type here"));
+        status.run();
+        field.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence c, int a1, int b1, int d) { }
+            public void onTextChanged(CharSequence c, int a1, int b1, int d) { }
+            public void afterTextChanged(android.text.Editable e) { ui.removeCallbacks(push[0]); ui.postDelayed(push[0], 150); }
+        });
         LinearLayout btns = row();
-        Button del = new Button(this);
-        del.setText("⌫");
-        del.setOnClickListener(v -> tv.deleteChars(1));
         Button yt = new Button(this);
         yt.setText(L.s("В YouTube", "On YouTube"));
         yt.setAllCaps(false);
-        yt.setOnClickListener(v -> { String t = field.getText().toString().trim(); if (!t.isEmpty()) { tv.youtubeSearch(t); field.setText(""); } });
+        yt.setOnClickListener(v -> { String t = field.getText().toString().trim(); if (!t.isEmpty()) { tv.youtubeSearch(t); kbdDialog.dismiss(); } });
         Button send = new Button(this);
-        send.setText(L.s("Ввести", "Enter"));
+        send.setText(L.s("Ввод ↵", "Enter ↵"));
         send.setAllCaps(false);
-        send.setOnClickListener(v -> { String t = field.getText().toString(); if (!t.trim().isEmpty()) { tv.typeText(t, true); field.setText(""); } });
-        btns.addView(del, new LinearLayout.LayoutParams(0, -2, 1f));
-        btns.addView(yt, new LinearLayout.LayoutParams(0, -2, 1.4f));
-        btns.addView(send, new LinearLayout.LayoutParams(0, -2, 1.4f));
+        send.setOnClickListener(v -> {
+            String t = field.getText().toString();
+            if (tv.isTvKeyboardOpen()) { ui.removeCallbacks(push[0]); tv.setFieldText(t); tv.enterKey(); kbdDialog.dismiss(); }
+            else if (!t.trim().isEmpty()) tv.typeText(t, true);
+        });
+        btns.addView(yt, new LinearLayout.LayoutParams(0, -2, 1f));
+        btns.addView(send, new LinearLayout.LayoutParams(0, -2, 1f));
         box.addView(btns);
-        field.setOnEditorActionListener((v, a, ev) -> { send.performClick(); return true; });
-        new AlertDialog.Builder(this).setTitle(L.s("Клавиатура", "Keyboard")).setView(box).setPositiveButton(L.s("Закрыть", "Close"), null).show();
+        field.setOnEditorActionListener((v, a1, ev) -> { send.performClick(); return true; });
+        kbdDialog = new AlertDialog.Builder(this).setTitle(L.s("Клавиатура", "Keyboard")).setView(box)
+                .setPositiveButton(L.s("Закрыть", "Close"), null).create();
+        kbdDialog.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+        kbdStatus = status;
+        kbdDialog.setOnDismissListener(d -> kbdStatus = null);
+        kbdDialog.show();
+        if (prefill != null) { field.setText(prefill); field.setSelection(prefill.length()); }
         field.requestFocus();
+    }
+
+    private Runnable kbdStatus;
+
+    @Override
+    public void onTvKeyboard(boolean open) {
+        ui.post(() -> {
+            if (kbdStatus != null) kbdStatus.run();
+            if (open && (kbdDialog == null || !kbdDialog.isShowing())) showKeyboard(null);
+        });
     }
 
     // ---------------- voice ----------------
@@ -1346,7 +1391,13 @@ public class MainActivity extends Activity implements TvClient.Listener {
         log(L.s("голос: «", "voice: “") + t + "»" + (voiceToYoutube ? " → YouTube" : L.s(" → поле поиска", " → search field")));
         flash("🎤 " + t);
         if (voiceToYoutube) tv.youtubeSearch(t);
-        else tv.typeText(t, true);
+        else if (tv.isTvKeyboardOpen()) tv.typeText(t, true);
+        else {
+            // No text field open on the TV: keep the words and let the user pick where they go.
+            showKeyboard(t);
+            toast(L.s("Выберите строку поиска на ТВ — текст уже готов, нажмите «Ввод»",
+                    "Select the search box on the TV — the text is ready, tap Enter"));
+        }
     }
 
     @Override
